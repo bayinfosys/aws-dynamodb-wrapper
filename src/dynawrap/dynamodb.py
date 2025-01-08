@@ -91,7 +91,7 @@ class DynamodbWrapper:
         create_item_key(pk_pattern_name, sk_pattern_name, **kwargs): Generates PK and SK keys.
         _insert_item_base(item, condition_expression=None): Inserts an item into the table.
         upsert_item(pk, sk, item, condition_expression=None): Upserts an item into the table.
-        _get_item_from_db(item_key): Retrieves an item by its key.
+        get_item_from_db(item_key): Retrieves an item by its key.
     """
 
     @classmethod
@@ -182,10 +182,16 @@ class DynamodbWrapper:
         sk = self.key(sk_pattern_name, **kwargs)
         return {"PK": pk, "SK": sk}
 
-    def _insert_item_base(self, item, table_name=None, condition_expression=None):
-        """Inserts an item into the DynamoDB table."""
+    def _insert_item_base(self, item: dict, condition_expression=None):
+        """Inserts an item into the DynamoDB table.
+        NB: `item` is just splatted into the table.put_item function so attributes
+            should be named fields in the dict; extra attributes will be inserted into
+            the db as fields.
+            All strings.
+        """
         table = self.dynamodb.Table(self.table_name)
         put_params = {"Item": item}
+
         if condition_expression:
             put_params.update({"ConditionExpression": condition_expression})
 
@@ -198,26 +204,53 @@ class DynamodbWrapper:
             logger.error(f"Error inserting item into DynamoDB: {error}")
 
     def upsert_item(
-        self, pk_name, sk_name, item, table_name=None, condition_expression=None
+        self,
+        pk_name: str,
+        sk_name: str,
+        item: dict,
+        table_name: str = None,
+        condition_expression=None,
     ):
-        """Upserts an item into the DynamoDB table."""
+        """Upserts an item into the DynamoDB table.
+
+        the PK and SK are generated and added to the `item` dict
+        `item` is then written to the database
+        """
         assert pk_name in self.access_patterns
         assert sk_name in self.access_patterns
         item_key = self.create_item_key(pk_name, sk_name, **item)
         item.update(item_key)
         self._insert_item_base(item)
 
-    def _get_item_from_db(self, item_key, table_name=None):
-        """Retrieves an item from the DynamoDB table by its key."""
+    def get_item_from_db(self, item_key: dict, table_name=None):
+        """Retrieves an item from the DynamoDB table by its key.
+
+        NB: the raw `Item` field is returned from the response with all the ["PK"]["S"] adornments
+        """
         table = self.dynamodb.Table(self.table_name)
         try:
             response = table.get_item(Key=item_key)
+
             if "Item" not in response:
                 logger.error(f"Item '{item_key}' not found.")
                 return None
-            return response["Item"]
+
+            response_item = response["Item"]
         except (BotoCoreError, ClientError) as error:
             logger.error(f"Error retrieving item from DynamoDB: {error}")
+            return None
+
+        logger.debug("read '%s' as '%s'", str(item_key), str(response_item))
+
+        try:
+            # remove the ["S"] typing information
+            d = boto3.dynamodb.types.TypeDeserializer()
+            item = {k: d.deserialize(v) for k, v in response_item.items()}
+            return item
+        except Exception as e:
+            logger.exception(
+                "failed to deserialized '%s' [%s]", str(response_item), str(e)
+            )
             return None
 
 
@@ -303,18 +336,18 @@ class DBItem(metaclass=DBItemMeta):
 
     @classmethod
     def get_table_name(cls):
-        """Returns the table name for this item."""
+        """returns the table name for this item."""
         return cls.table_name
 
     def save(self, data):
-        """Saves the current object's data to DynamoDB."""
+        """saves the current object's data to DynamoDB."""
         self.db_wrapper.upsert_item(self.pk_name, self.sk_name, data)
 
     @classmethod
     def read(cls, db_wrapper, **kwargs):
-        """Reads an item from DynamoDB and returns a new instance."""
+        """reads an item from DynamoDB and returns a new instance."""
         item_key = db_wrapper.create_item_key(cls.pk_name, cls.sk_name, **kwargs)
-        item_data = db_wrapper._get_item_from_db(item_key)
+        item_data = db_wrapper.get_item_from_db(item_key)
 
         if not item_data:
             raise ValueError(f"No item found for key: {item_key}")
