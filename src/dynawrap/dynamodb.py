@@ -235,22 +235,21 @@ class DynamodbWrapper:
                 logger.error(f"Item '{item_key}' not found.")
                 return None
 
-            response_item = response["Item"]
+            return response["Item"]
         except (BotoCoreError, ClientError) as error:
             logger.error(f"Error retrieving item from DynamoDB: {error}")
             return None
 
-        logger.debug("read '%s' as '%s'", str(item_key), str(response_item))
-
+    @classmethod
+    def deserialize_db_item(cls, item_data):
+        """convert the db annotated item to python dict"""
         try:
             # remove the ["S"] typing information
             d = boto3.dynamodb.types.TypeDeserializer()
-            item = {k: d.deserialize(v) for k, v in response_item.items()}
+            item = {k: d.deserialize(v) for k, v in item_data.items()}
             return item
         except Exception as e:
-            logger.exception(
-                "failed to deserialized '%s' [%s]", str(response_item), str(e)
-            )
+            logger.exception("failed to deserialize '%s' [%s]", str(item_data), str(e))
             return None
 
 
