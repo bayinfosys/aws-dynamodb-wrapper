@@ -193,9 +193,7 @@ class DynamodbWrapper:
             logger.debug(f"Inserted item with PK: {item['PK']} and SK: {item['SK']}")
             table.put_item(**put_params)
         except self.dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
-            logger.warning(
-                f"Item with PK: {item['PK']} and SK: {item['SK']} already exists."
-            )
+            logger.warning(f"PK: {item['PK']}, SK: {item['SK']} already exists.")
         except (BotoCoreError, ClientError) as error:
             logger.error(f"Error inserting item into DynamoDB: {error}")
 
