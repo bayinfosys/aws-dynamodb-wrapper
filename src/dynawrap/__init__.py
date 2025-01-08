@@ -1,1 +1,1 @@
-from dynamodb import DynamodbWrapper, DBItem
+from .dynamodb import DynamodbWrapper, DBItem

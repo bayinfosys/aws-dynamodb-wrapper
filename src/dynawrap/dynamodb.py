@@ -36,7 +36,6 @@ Example Usage:
   retrieved_story = Story.read(db_wrapper_story, owner="johndoe", story_id="1234")
   print(retrieved_story.data)
 """
-import os
 import logging
 
 import boto3
@@ -94,6 +93,7 @@ class DynamodbWrapper:
         upsert_item(pk, sk, item, condition_expression=None): Upserts an item into the table.
         _get_item_from_db(item_key): Retrieves an item by its key.
     """
+
     @classmethod
     def get_table_spec(cls, table_name, gsi_name):
         """Returns the table specification for DynamoDB.
@@ -137,13 +137,14 @@ class DynamodbWrapper:
         Args:
             db_item_class (type): A `DBItem` subclass whose table and patterns to use.
         """
-        assert issubclass(db_item_class, DBItem), "db_item_class must be a subclass of DBItem"
+        assert issubclass(
+            db_item_class, DBItem
+        ), "db_item_class must be a subclass of DBItem"
         self.table_name = db_item_class.table_name
         self.access_patterns = DBItemMeta.get_access_patterns()
 
         self.dynamodb = boto3.resource("dynamodb")
         self.client = boto3.client("dynamodb")
-
 
     def key(self, key_type, **kwargs):
         """Generates a key string based on the specified access pattern.
@@ -192,11 +193,15 @@ class DynamodbWrapper:
             logger.debug(f"Inserted item with PK: {item['PK']} and SK: {item['SK']}")
             table.put_item(**put_params)
         except self.dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
-            logger.warning(f"Item with PK: {item['PK']} and SK: {item['SK']} already exists.")
+            logger.warning(
+                f"Item with PK: {item['PK']} and SK: {item['SK']} already exists."
+            )
         except (BotoCoreError, ClientError) as error:
             logger.error(f"Error inserting item into DynamoDB: {error}")
 
-    def upsert_item(self, pk_name, sk_name, item, table_name=None, condition_expression=None):
+    def upsert_item(
+        self, pk_name, sk_name, item, table_name=None, condition_expression=None
+    ):
         """Upserts an item into the DynamoDB table."""
         assert pk_name in self.access_patterns
         assert sk_name in self.access_patterns
@@ -233,12 +238,16 @@ class DBItemMeta(type):
         # Register patterns and set names
         if pk_pattern:
             pk_name = f"{name}_pk"
-            DBItemMeta._access_patterns[pk_name] = AccessPattern(name=pk_name, pattern=pk_pattern)
+            DBItemMeta._access_patterns[pk_name] = AccessPattern(
+                name=pk_name, pattern=pk_pattern
+            )
             dct["pk_name"] = pk_name
 
         if sk_pattern:
             sk_name = f"{name}_sk"
-            DBItemMeta._access_patterns[sk_name] = AccessPattern(name=sk_name, pattern=sk_pattern)
+            DBItemMeta._access_patterns[sk_name] = AccessPattern(
+                name=sk_name, pattern=sk_pattern
+            )
             dct["sk_name"] = sk_name
 
         if name != "DBItem" and not table_name:
@@ -286,6 +295,7 @@ class DBItem(metaclass=DBItemMeta):
         retrieved_story = Story.read(db_wrapper, owner="johndoe", story_id="1234")
         print(retrieved_story.data)
     """
+
     table_name = None  # Specify the table name here
     pk_pattern = None
     sk_pattern = None
@@ -314,4 +324,3 @@ class DBItem(metaclass=DBItemMeta):
         instance = cls(db_wrapper)
         instance.data = item_data
         return instance
-
