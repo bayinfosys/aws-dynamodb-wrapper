@@ -1,8 +1,5 @@
-"""
-dynamodb_utilities
-
-This module provides a utility framework for interacting with DynamoDB using 
-an object-oriented approach. It includes functionality for dynamically generating 
+"""This module provides a utility framework for interacting with DynamoDB using
+an object-oriented approach. It includes functionality for dynamically generating
 DynamoDB keys based on access patterns and managing DynamoDB items as Python objects.
 
 Features:
