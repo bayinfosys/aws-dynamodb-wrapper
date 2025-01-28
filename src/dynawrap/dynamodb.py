@@ -155,7 +155,7 @@ class DynamodbWrapper:
         assert pk_name in self.access_patterns
         assert sk_name in self.access_patterns
         item_key = self.create_item_key(pk_name, sk_name, **kwargs)
-        item.update(item_key)
+        item = dict(**kwargs or {}, **item_key)
         self._insert_item_base(item)
 
     def get_item_from_db(self, item_key: dict, table_name=None):
