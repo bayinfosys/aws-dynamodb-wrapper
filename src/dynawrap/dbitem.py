@@ -48,9 +48,9 @@ class DBItem(metaclass=DBItemMeta):
         """returns the table name for this item."""
         return cls.table_name
 
-    def save(self, data):
+    def save(self, **kwargs):
         """saves the current object's data to DynamoDB."""
-        self.db_wrapper.upsert_item(self.pk_name, self.sk_name, data)
+        self.db_wrapper.upsert_item(self.pk_name, self.sk_name, **kwargs)
 
     @classmethod
     def read(cls, db_wrapper, **kwargs):

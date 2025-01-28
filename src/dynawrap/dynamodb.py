@@ -143,9 +143,9 @@ class DynamodbWrapper:
         self,
         pk_name: str,
         sk_name: str,
-        item: dict,
         table_name: str = None,
         condition_expression=None,
+        **kwargs,
     ):
         """Upserts an item into the DynamoDB table.
 
@@ -154,7 +154,7 @@ class DynamodbWrapper:
         """
         assert pk_name in self.access_patterns
         assert sk_name in self.access_patterns
-        item_key = self.create_item_key(pk_name, sk_name, **item)
+        item_key = self.create_item_key(pk_name, sk_name, **kwargs)
         item.update(item_key)
         self._insert_item_base(item)
 
