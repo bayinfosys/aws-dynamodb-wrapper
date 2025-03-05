@@ -174,7 +174,11 @@ class DynamodbWrapper:
     #
     def save(self, item, **kwargs):
         """saves the current object's data to DynamoDB."""
-        self.upsert_item(item.pk_pattern, item.sk_pattern, **kwargs)
+        try:
+            self.upsert_item(item.pk_pattern, item.sk_pattern, **kwargs)
+        except TypeError as e:
+            logger.exception("failed to pass PK=%s, SK=%s, '%s' [%s]", item.pk_pattern, item.sk_pattern, str(kwargs), str(e))
+            raise
 
     def read(self, item_cls, **kwargs):
         """reads an item from DynamoDB and returns a new instance."""
