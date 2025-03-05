@@ -172,3 +172,22 @@ class DynamodbWrapper:
         except Exception as e:
             logger.exception("failed to deserialize '%s' [%s]", str(item_data), str(e))
             return None
+
+    #
+    # item interface
+    #
+    def save(self, item, **kwargs):
+        """saves the current object's data to DynamoDB."""
+        self.upsert_item(item.pk_pattern, item.sk_pattern, **kwargs)
+
+    def read(self, item_cls, **kwargs):
+        """reads an item from DynamoDB and returns a new instance."""
+        item_key = self.create_item_key(item_cls.pk_pattern, item_cls.sk_pattern, **kwargs)
+        item_data = self.get_item_from_db(item_key)
+
+        if not item_data:
+            raise ValueError(f"No item found for key: {item_key}")
+
+        instance = item_cls()
+        instance.data = item_data
+        return instance
