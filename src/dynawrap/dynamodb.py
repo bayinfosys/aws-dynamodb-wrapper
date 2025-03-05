@@ -60,12 +60,10 @@ class DynamodbWrapper:
             ],
         }
 
-    def __init__(self, endpoint_url=None):
+    def __init__(self, table_name: str, endpoint_url=None):
         """
         Initializes the DynamoDB wrapper.
         """
-        self.table_name = db_item_class.table_name
-
         self.dynamodb = boto3.resource("dynamodb", endpoint_url=endpoint_url)
         self.client = boto3.client("dynamodb", endpoint_url=endpoint_url)
 
@@ -130,8 +128,6 @@ class DynamodbWrapper:
         self,
         pk_pattern: str,
         sk_pattern: str,
-        table_name: str = None,
-        condition_expression=None,
         **kwargs,
     ):
         """Upserts an item into the DynamoDB table.
@@ -143,7 +139,7 @@ class DynamodbWrapper:
         item = dict(**kwargs or {}, **item_key)
         self._insert_item_base(item)
 
-    def get_item_from_db(self, item_key: dict, table_name=None):
+    def get_item_from_db(self, item_key: dict):
         """Retrieves an item from the DynamoDB table by its key.
 
         NB: the raw `Item` field is returned from the response with all the ["PK"]["S"] adornments
