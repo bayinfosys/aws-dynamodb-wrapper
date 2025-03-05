@@ -5,7 +5,6 @@ DynamoDB keys based on access patterns and managing DynamoDB items as Python obj
 Features:
     - Encapsulates DynamoDB operations (get, put, update) through a `DynamodbWrapper`.
     - Supports custom table names for each `DBItem` subclass.
-    - Uses `AccessPattern` to define reusable key generation logic.
     - Defines `DBItem` as a base class for DynamoDB row objects.
 
 Table Management:

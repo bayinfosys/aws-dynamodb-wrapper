@@ -4,7 +4,6 @@ A lightweight wrapper to manage access patterns and object-oriented interactions
 
 ## Features
 
-- Define reusable **access patterns** for DynamoDB keys with Python templates.
 - Simplify read/write operations with object-oriented classes.
 - Automatically register and validate table-specific key patterns.
 - Provides low-level DynamoDB operations via `boto3`.
@@ -34,7 +33,7 @@ class Story(DBItem):
 Save an item to DynamoDB by populating its attributes and calling `save()`.
 
 ```python
-db_wrapper = DynamodbWrapper(Story)
+db_wrapper = DynamodbWrapper()
 story = Story(db_wrapper)
 story_data = {"owner": "johndoe", "story_id": "1234", "title": "Test Story"}
 story.save(story_data)

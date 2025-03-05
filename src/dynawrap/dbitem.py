@@ -1,7 +1,4 @@
-from .dbitemmeta import DBItemMeta
-
-
-class DBItem(metaclass=DBItemMeta):
+class DBItem:
     """Base class for a DynamoDB row item.
 
     Subclasses define their table-specific `table_name`, `pk_pattern`, and `sk_pattern`.
@@ -50,12 +47,14 @@ class DBItem(metaclass=DBItemMeta):
 
     def save(self, **kwargs):
         """saves the current object's data to DynamoDB."""
-        self.db_wrapper.upsert_item(self.pk_name, self.sk_name, **kwargs)
+        #self.db_wrapper.upsert_item(self.pk_name, self.sk_name, **kwargs)
+        self.db_wrapper.upsert_item(self.pk_pattern, self.sk_pattern, **kwargs)
 
     @classmethod
     def read(cls, db_wrapper, **kwargs):
         """reads an item from DynamoDB and returns a new instance."""
-        item_key = db_wrapper.create_item_key(cls.pk_name, cls.sk_name, **kwargs)
+        #item_key = db_wrapper.create_item_key(cls.pk_name, cls.sk_name, **kwargs)
+        item_key = db_wrapper.create_item_key(cls.pk_pattern, cls.sk_pattern, **kwargs)
         item_data = db_wrapper.get_item_from_db(item_key)
 
         if not item_data:

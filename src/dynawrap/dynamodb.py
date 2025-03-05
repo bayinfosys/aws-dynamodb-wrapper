@@ -4,10 +4,6 @@ import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
 
-from .dbitemmeta import DBItemMeta
-from .dbitem import DBItem
-
-
 logger = logging.getLogger(__name__)
 
 
@@ -15,12 +11,10 @@ class DynamodbWrapper:
     """Encapsulates DynamoDB get/put access and key management.
 
     Each `DynamodbWrapper` instance operates on a single DynamoDB table,
-    specified during initialization. Subclasses of `DBItem` can also define
-    their associated table via the `table_name` attribute.
+    specified during initialization.
 
     Attributes:
         table_name (str): The name of the DynamoDB table this wrapper operates on.
-        access_patterns (dict): A dictionary of `AccessPattern` objects indexed by their names.
 
     Methods:
         key(key_type, **kwargs): Generates a key string based on the specified access pattern.
@@ -66,23 +60,16 @@ class DynamodbWrapper:
             ],
         }
 
-    def __init__(self, db_item_class, endpoint_url=None):
+    def __init__(self, endpoint_url=None):
         """
         Initializes the DynamoDB wrapper.
-
-        Args:
-            db_item_class (type): A `DBItem` subclass whose table and patterns to use.
         """
-        assert issubclass(
-            db_item_class, DBItem
-        ), "db_item_class must be a subclass of DBItem"
         self.table_name = db_item_class.table_name
-        self.access_patterns = DBItemMeta.get_access_patterns()
 
         self.dynamodb = boto3.resource("dynamodb", endpoint_url=endpoint_url)
         self.client = boto3.client("dynamodb", endpoint_url=endpoint_url)
 
-    def key(self, key_type, **kwargs):
+    def key(self, key_pattern, **kwargs):
         """Generates a key string based on the specified access pattern.
 
         Args:
@@ -93,17 +80,17 @@ class DynamodbWrapper:
             str: The generated key string.
         """
         try:
-            return self.access_patterns[key_type].generate(**kwargs)
+            return key_pattern.format(**kwargs)
         except KeyError as e:
             logger.error(
-                "KeyError for 'key_type=%s', with kwargs='%s', access_pattern='%s'",
-                str(key_type),
+                "KeyError for 'key_type=%s', with kwargs='%s', [%s]",
+                str(key_pattern),
                 str(kwargs),
-                str(self.access_patterns.get(key_type, None)),
+                str(e)
             )
             raise e
 
-    def create_item_key(self, pk_pattern_name, sk_pattern_name, **kwargs):
+    def create_item_key(self, pk_pattern, sk_pattern, **kwargs):
         """Generates PK and SK keys based on specified access patterns.
 
         Args:
@@ -114,8 +101,8 @@ class DynamodbWrapper:
         Returns:
             dict: A dictionary containing the generated PK and SK keys.
         """
-        pk = self.key(pk_pattern_name, **kwargs)
-        sk = self.key(sk_pattern_name, **kwargs)
+        pk = self.key(pk_pattern, **kwargs)
+        sk = self.key(sk_pattern, **kwargs)
         return {"PK": pk, "SK": sk}
 
     def _insert_item_base(self, item: dict, condition_expression=None):
@@ -141,8 +128,8 @@ class DynamodbWrapper:
 
     def upsert_item(
         self,
-        pk_name: str,
-        sk_name: str,
+        pk_pattern: str,
+        sk_pattern: str,
         table_name: str = None,
         condition_expression=None,
         **kwargs,
@@ -152,9 +139,7 @@ class DynamodbWrapper:
         the PK and SK are generated and added to the `item` dict
         `item` is then written to the database
         """
-        assert pk_name in self.access_patterns
-        assert sk_name in self.access_patterns
-        item_key = self.create_item_key(pk_name, sk_name, **kwargs)
+        item_key = self.create_item_key(pk_pattern, sk_pattern, **kwargs)
         item = dict(**kwargs or {}, **item_key)
         self._insert_item_base(item)
 
