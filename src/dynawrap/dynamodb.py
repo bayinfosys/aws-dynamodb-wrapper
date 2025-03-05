@@ -66,6 +66,7 @@ class DynamodbWrapper:
         """
         self.dynamodb = boto3.resource("dynamodb", endpoint_url=endpoint_url)
         self.client = boto3.client("dynamodb", endpoint_url=endpoint_url)
+        self.table_name = table_name
 
     def key(self, key_pattern, **kwargs):
         """Generates a key string based on the specified access pattern.
