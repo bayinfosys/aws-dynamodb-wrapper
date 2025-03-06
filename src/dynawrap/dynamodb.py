@@ -1,7 +1,9 @@
 import logging
+import string
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
+from boto3.dynamodb.conditions import Key
 
 
 logger = logging.getLogger(__name__)
@@ -89,8 +91,39 @@ class DynamodbWrapper:
             )
             raise e
 
+    def prefix_key(self, sk_pattern: str, **kwargs):
+        """Dynamically generate an SK prefix by trimming the last missing variable.
+        Do not include the latter placeholder key in kwargs, and this will generate
+        a prefix search.
+
+        Args:
+            sk_pattern (str): The SK pattern with placeholders.
+            **kwargs: Key-value pairs to populate the SK sans last placeholder
+
+        Returns:
+            str: The SK prefix (truncated if necessary).
+        """
+        formatter = string.Formatter()
+        fields = [fname for _, fname, *_ in formatter.parse(sk_pattern) if fname]
+
+        if not fields:
+            return sk_pattern
+
+        # TODO: starting from the end, work backwards until we find a placeholder in kwargs
+        last_placeholder = fields[-1]  # last placeholder
+
+        # Check if the last placeholder is missing in kwargs
+        if last_placeholder not in kwargs:
+            sk_prefix = sk_pattern.split(f"{{{last_placeholder}}}")[0]
+            return sk_prefix.format(**kwargs)
+
+        # If all placeholders are present, format normally
+        return sk_pattern.format(**kwargs)
+
     def create_item_key(self, pk_pattern, sk_pattern, **kwargs):
         """Generates PK and SK keys based on specified access patterns.
+
+        if the kwargs for sk are not all present, the method attempts to build a prefix sk
 
         Args:
             pk_pattern_name (str): Name of the PK access pattern.
@@ -101,7 +134,13 @@ class DynamodbWrapper:
             dict: A dictionary containing the generated PK and SK keys.
         """
         pk = self.key(pk_pattern, **kwargs)
-        sk = self.key(sk_pattern, **kwargs)
+
+        # if the sk is not fully define, attempt to build a prefix sk
+        try:
+            sk = self.key(sk_pattern, **kwargs)
+        except KeyError as e:
+            sk = self.prefix_key(sk_pattern, **kwargs)
+
         return {"PK": pk, "SK": sk}
 
     def _insert_item_base(self, item: dict, condition_expression=None):
@@ -169,6 +208,31 @@ class DynamodbWrapper:
         except Exception as e:
             logger.exception("failed to deserialize '%s' [%s]", str(item_data), str(e))
             return None
+
+    def get_items_by_prefix(self, item_key: dict, count_only=False):
+        """Fetch all records where SK starts with a given prefix.
+
+        Args:
+            pk_value (str): The exact PK value to match.
+            sk_prefix (str): The SK prefix to match.
+
+        Returns:
+            list[dict]: List of matching items.
+        """
+        table = self.dynamodb.Table(self.table_name)
+        condition = Key("PK").eq(item_key["PK"]) & Key("SK").begins_with(item_key["SK"])
+        select = "COUNT" if count_only else "ALL_ATTRIBUTES"
+
+        try:
+            response = table.query(KeyConditionExpression=condition, Select=select)
+        except (BotoCoreError, ClientError) as error:
+            logger.error(f"Error fetching items by prefix: {error}")
+            return 0 if count_only else []
+
+        if count_only:
+            return response.get("Count", 0)
+        else:
+            return response.get("Items", [])
 
     #
     # item interface
