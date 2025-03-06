@@ -91,34 +91,37 @@ class DynamodbWrapper:
             )
             raise e
 
-    def prefix_key(self, sk_pattern: str, **kwargs):
+    def prefix_key(self, key_pattern: str, **kwargs):
         """Dynamically generate an SK prefix by trimming the last missing variable.
         Do not include the latter placeholder key in kwargs, and this will generate
         a prefix search.
 
         Args:
-            sk_pattern (str): The SK pattern with placeholders.
+            key_pattern (str): The key pattern with placeholders.
             **kwargs: Key-value pairs to populate the SK sans last placeholder
 
         Returns:
             str: The SK prefix (truncated if necessary).
         """
         formatter = string.Formatter()
-        fields = [fname for _, fname, *_ in formatter.parse(sk_pattern) if fname]
+        parsed_fields = list(formatter.parse(key_pattern))
 
-        if not fields:
-            return sk_pattern
+        if not parsed_fields:
+            return self.key(key_pattern, **kwargs)
 
         # TODO: starting from the end, work backwards until we find a placeholder in kwargs
-        last_placeholder = fields[-1]  # last placeholder
+        # NB: this is a little hardcoded for integer format strings
+        last_placeholder = ":".join(list(parsed_fields)[-1][1:3])  # last placeholder wuth format string
 
         # Check if the last placeholder is missing in kwargs
         if last_placeholder not in kwargs:
-            sk_prefix = sk_pattern.split(f"{{{last_placeholder}}}")[0]
-            return sk_prefix.format(**kwargs)
+            prefix_pattern = key_pattern.split(f"{{{last_placeholder}}}")[0]
+            return self.key(prefix_pattern, **kwargs)
+        else:
+            logger.warning("all placeholders found in kwargs")
 
         # If all placeholders are present, format normally
-        return sk_pattern.format(**kwargs)
+        return self.key(key_pattern, **kwargs)
 
     def create_item_key(self, pk_pattern, sk_pattern, **kwargs):
         """Generates PK and SK keys based on specified access patterns.
@@ -138,7 +141,7 @@ class DynamodbWrapper:
         # if the sk is not fully define, attempt to build a prefix sk
         try:
             sk = self.key(sk_pattern, **kwargs)
-        except KeyError as e:
+        except KeyError:
             sk = self.prefix_key(sk_pattern, **kwargs)
 
         return {"PK": pk, "SK": sk}
