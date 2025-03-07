@@ -83,12 +83,7 @@ class DynamodbWrapper:
         try:
             return key_pattern.format(**kwargs)
         except KeyError as e:
-            logger.error(
-                "KeyError for 'key_type=%s', with kwargs='%s', [%s]",
-                str(key_pattern),
-                str(kwargs),
-                str(e)
-            )
+            # key error is allowed because we retry with a prefix
             raise e
 
     def prefix_key(self, key_pattern: str, **kwargs):
@@ -256,6 +251,4 @@ class DynamodbWrapper:
         if not item_data:
             raise ValueError(f"No item found for key: {item_key}")
 
-        instance = item_cls()
-        instance.data = item_data
-        return instance
+        return item_cls(**item_data)
