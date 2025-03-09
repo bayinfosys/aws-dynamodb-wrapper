@@ -70,7 +70,8 @@ class DynamodbWrapper:
         self.client = boto3.client("dynamodb", endpoint_url=endpoint_url)
         self.table_name = table_name
 
-    def key(self, key_pattern, **kwargs):
+    @classmethod
+    def key(cls, key_pattern, **kwargs):
         """Generates a key string based on the specified access pattern.
 
         Args:
@@ -86,7 +87,8 @@ class DynamodbWrapper:
             # key error is allowed because we retry with a prefix
             raise e
 
-    def prefix_key(self, key_pattern: str, **kwargs):
+    @classmethod
+    def prefix_key(cls, key_pattern: str, **kwargs):
         """Dynamically generate an SK prefix by trimming the last missing variable.
         Do not include the latter placeholder key in kwargs, and this will generate
         a prefix search.
@@ -102,7 +104,7 @@ class DynamodbWrapper:
         parsed_fields = list(formatter.parse(key_pattern))
 
         if not parsed_fields:
-            return self.key(key_pattern, **kwargs)
+            return cls.key(key_pattern, **kwargs)
 
         # TODO: starting from the end, work backwards until we find a placeholder in kwargs
         # NB: this is a little hardcoded for integer format strings
@@ -111,14 +113,15 @@ class DynamodbWrapper:
         # Check if the last placeholder is missing in kwargs
         if last_placeholder not in kwargs:
             prefix_pattern = key_pattern.split(f"{{{last_placeholder}}}")[0]
-            return self.key(prefix_pattern, **kwargs)
+            return cls.key(prefix_pattern, **kwargs)
         else:
             logger.warning("all placeholders found in kwargs")
 
         # If all placeholders are present, format normally
-        return self.key(key_pattern, **kwargs)
+        return cls.key(key_pattern, **kwargs)
 
-    def create_item_key(self, pk_pattern, sk_pattern, **kwargs):
+    @classmethod
+    def create_item_key(cls, pk_pattern, sk_pattern, **kwargs):
         """Generates PK and SK keys based on specified access patterns.
 
         if the kwargs for sk are not all present, the method attempts to build a prefix sk
@@ -131,13 +134,13 @@ class DynamodbWrapper:
         Returns:
             dict: A dictionary containing the generated PK and SK keys.
         """
-        pk = self.key(pk_pattern, **kwargs)
+        pk = cls.key(pk_pattern, **kwargs)
 
         # if the sk is not fully define, attempt to build a prefix sk
         try:
-            sk = self.key(sk_pattern, **kwargs)
+            sk = cls.key(sk_pattern, **kwargs)
         except KeyError:
-            sk = self.prefix_key(sk_pattern, **kwargs)
+            sk = cls.prefix_key(sk_pattern, **kwargs)
 
         return {"PK": pk, "SK": sk}
 
