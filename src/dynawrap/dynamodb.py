@@ -1,9 +1,11 @@
 import logging
-import string
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from boto3.dynamodb.conditions import Key
+
+
+from .dbitem import DBItem
 
 
 logger = logging.getLogger(__name__)
@@ -22,7 +24,6 @@ class DynamodbWrapper:
         key(key_type, **kwargs): Generates a key string based on the specified access pattern.
         create_item_key(pk_pattern_name, sk_pattern_name, **kwargs): Generates PK and SK keys.
         _insert_item_base(item, condition_expression=None): Inserts an item into the table.
-        upsert_item(pk, sk, item, condition_expression=None): Upserts an item into the table.
         get_item_from_db(item_key): Retrieves an item by its key.
     """
 
@@ -70,80 +71,6 @@ class DynamodbWrapper:
         self.client = boto3.client("dynamodb", endpoint_url=endpoint_url)
         self.table_name = table_name
 
-    @classmethod
-    def key(cls, key_pattern, **kwargs):
-        """Generates a key string based on the specified access pattern.
-
-        Args:
-            key_type (str): The name of the access pattern.
-            **kwargs: Values to replace the placeholders in the pattern.
-
-        Returns:
-            str: The generated key string.
-        """
-        try:
-            return key_pattern.format(**kwargs)
-        except KeyError as e:
-            # key error is allowed because we retry with a prefix
-            raise e
-
-    @classmethod
-    def prefix_key(cls, key_pattern: str, **kwargs):
-        """Dynamically generate an SK prefix by trimming the last missing variable.
-        Do not include the latter placeholder key in kwargs, and this will generate
-        a prefix search.
-
-        Args:
-            key_pattern (str): The key pattern with placeholders.
-            **kwargs: Key-value pairs to populate the SK sans last placeholder
-
-        Returns:
-            str: The SK prefix (truncated if necessary).
-        """
-        formatter = string.Formatter()
-        parsed_fields = list(formatter.parse(key_pattern))
-
-        if not parsed_fields:
-            return cls.key(key_pattern, **kwargs)
-
-        # TODO: starting from the end, work backwards until we find a placeholder in kwargs
-        # NB: this is a little hardcoded for integer format strings
-        last_placeholder = ":".join(list(parsed_fields)[-1][1:3])  # last placeholder wuth format string
-
-        # Check if the last placeholder is missing in kwargs
-        if last_placeholder not in kwargs:
-            prefix_pattern = key_pattern.split(f"{{{last_placeholder}}}")[0]
-            return cls.key(prefix_pattern, **kwargs)
-        else:
-            logger.warning("all placeholders found in kwargs")
-
-        # If all placeholders are present, format normally
-        return cls.key(key_pattern, **kwargs)
-
-    @classmethod
-    def create_item_key(cls, pk_pattern, sk_pattern, **kwargs):
-        """Generates PK and SK keys based on specified access patterns.
-
-        if the kwargs for sk are not all present, the method attempts to build a prefix sk
-
-        Args:
-            pk_pattern_name (str): Name of the PK access pattern.
-            sk_pattern_name (str): Name of the SK access pattern.
-            **kwargs: Values to replace placeholders in the patterns.
-
-        Returns:
-            dict: A dictionary containing the generated PK and SK keys.
-        """
-        pk = cls.key(pk_pattern, **kwargs)
-
-        # if the sk is not fully define, attempt to build a prefix sk
-        try:
-            sk = cls.key(sk_pattern, **kwargs)
-        except KeyError:
-            sk = cls.prefix_key(sk_pattern, **kwargs)
-
-        return {"PK": pk, "SK": sk}
-
     def _insert_item_base(self, item: dict, condition_expression=None):
         """Inserts an item into the DynamoDB table.
         NB: `item` is just splatted into the table.put_item function so attributes
@@ -164,21 +91,6 @@ class DynamodbWrapper:
             logger.warning(f"PK: {item['PK']}, SK: {item['SK']} already exists.")
         except (BotoCoreError, ClientError) as error:
             logger.error(f"Error inserting item into DynamoDB: {error}")
-
-    def upsert_item(
-        self,
-        pk_pattern: str,
-        sk_pattern: str,
-        **kwargs,
-    ):
-        """Upserts an item into the DynamoDB table.
-
-        the PK and SK are generated and added to the `item` dict
-        `item` is then written to the database
-        """
-        item_key = self.create_item_key(pk_pattern, sk_pattern, **kwargs)
-        item = dict(**kwargs or {}, **item_key)
-        self._insert_item_base(item)
 
     def get_item_from_db(self, item_key: dict):
         """Retrieves an item from the DynamoDB table by its key.
@@ -238,17 +150,19 @@ class DynamodbWrapper:
     #
     # item interface
     #
-    def save(self, item, **kwargs):
+    def save(self, item: DBItem, **kwargs):
         """saves the current object's data to DynamoDB."""
         try:
-            self.upsert_item(item.pk_pattern, item.sk_pattern, **kwargs)
+            item_key = item.create_item_key(**kwargs)
+            db_item = dict(**kwargs or {}, **item_key)
+            self._insert_item_base(db_item)
         except TypeError as e:
             logger.exception("failed to pass PK=%s, SK=%s, '%s' [%s]", item.pk_pattern, item.sk_pattern, str(kwargs), str(e))
             raise
 
     def read(self, item_cls, **kwargs):
         """reads an item from DynamoDB and returns a new instance."""
-        item_key = self.create_item_key(item_cls.pk_pattern, item_cls.sk_pattern, **kwargs)
+        item_key = item_cls.create_item_key(**kwargs)
         item_data = self.get_item_from_db(item_key)
 
         if not item_data:
