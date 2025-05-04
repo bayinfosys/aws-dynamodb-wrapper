@@ -150,14 +150,13 @@ class DynamodbWrapper:
     #
     # item interface
     #
-    def save(self, item: DBItem, **kwargs):
-        """saves the current object's data to DynamoDB."""
+    def save(self, item: DBItem):
+        """saves the item data to DynamoDB."""
         try:
-            item_key = item.create_item_key(**kwargs)
-            db_item = dict(**kwargs or {}, **item_key)
+            db_item = item.to_dynamodb_item()
             self._insert_item_base(db_item)
         except TypeError as e:
-            logger.exception("failed to pass PK=%s, SK=%s, '%s' [%s]", item.pk_pattern, item.sk_pattern, str(kwargs), str(e))
+            logger.exception("failed to save PK=%s, SK=%s, '%s' [%s]", item.pk_pattern, item.sk_pattern, str(e))
             raise
 
     def read(self, item_cls, **kwargs):

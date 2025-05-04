@@ -55,6 +55,28 @@ story.data['title'] = "Updated Story Title"
 story.save(story.data)
 ```
 
+### DynamoDB Streams
+From a lambda handler of a dynamodb stream, automatically call the appropriate model and handler:
+
+```python
+class UserProfile(BaseModel, DBItem):
+    ...
+
+    def handle_stream_event(self, event_type: str):
+        if event_type == "INSERT":
+            # send a welcome email on new user signup
+            send_welcome_email(self.email)
+
+
+def lambda_handler(event, context):
+    for record in event["Records"]:
+        try:
+            model = ModelRegistry.from_stream(record)
+            model.handle_stream_event(record["eventName"])
+        except Exception as e:
+            logger.warning("Unprocessable record: %s", e)
+```
+
 ### Advanced Operations
 - **Custom Access Patterns:** Create multiple `AccessPattern` instances for advanced queries.
 - **Global Secondary Indexes (GSI):** Define GSIs for alternative query patterns (future feature).

@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="dynawrap",
-    version="1.0.0",
+    use_scm_version={"write_to": "src/dynawrap/_version.py"},
     description="Lightweight wrapper to handle access pattern management to AWS DynamoDB tables",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
@@ -19,6 +19,7 @@ setup(
     python_requires=">=3.7",
     install_requires=[
         "boto3>=1.20.0",
+        "parse"
     ],
     extras_require={
         "dev": ["pytest", "black", "flake8"],

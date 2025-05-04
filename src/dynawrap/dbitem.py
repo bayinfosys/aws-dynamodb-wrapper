@@ -1,4 +1,6 @@
+import boto3
 import string
+import parse
 import logging
 
 
@@ -7,34 +9,34 @@ logger = logging.getLogger(__name__)
 
 class DBItem:
     """Base class for a DynamoDB row item.
+    To be used as a mixin with pydantic.BaseModel.
 
-    Subclasses define their table-specific `table_name`, `pk_pattern`, and `sk_pattern`.
+    Subclasses define their specific `pk_pattern`, and `sk_pattern`.
 
     Attributes:
-        table_name (str): The name of the DynamoDB table associated with this item.
         pk_pattern (str): The primary key pattern for the item.
         sk_pattern (str): The sort key pattern for the item.
 
     Example:
 
         class Story(DBItem):
-            table_name = "StoryTable"
             pk_pattern = "USER#{owner}#STORY#{story_id}"
             sk_pattern = "STORY#{story_id}"
 
-        db_wrapper = DynamodbWrapper("StoryTable")
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table()
 
         # Save a story
         story = Story()
         story.data = {"owner": "johndoe", "story_id": "1234", "title": "My Story"}
-        db_wrapper.save(story)
+        table.put_item(Item=story.to_dynamo_item())
 
         # Read a story
-        retrieved_story = db_wrapper.read(Story, owner="johndoe", story_id="1234")
+        story_key = Story.create_item_key(owner="johndoe", story_id="1234")
+        retrieved_story = table.get_item(Item=story_key)
         print(retrieved_story.data)
     """
 
-    table_name = None  # Specify the table name here
     pk_pattern = None
     sk_pattern = None
 
@@ -111,3 +113,64 @@ class DBItem:
             sk = cls.prefix_key(cls.sk_pattern, **kwargs)
 
         return {"PK": pk, "SK": sk}
+
+    @classmethod
+    def is_match(cls, pk: str, sk: str) -> bool:
+        """return True if pk and sk can be parsed into pk_pattern and sk_pattern
+           False otherwise
+        """
+        return (
+            parse(cls.pk_pattern, pk) is not None and
+            parse(cls.sk_pattern, sk) is not None
+        )
+
+    @classmethod
+    def deserialize_db_item(cls, item_data):
+        """convert the db annotated item to python dict"""
+        try:
+            # remove the ["S"] typing information
+            d = boto3.dynamodb.types.TypeDeserializer()
+            item = {k: d.deserialize(v) for k, v in item_data.items()}
+            return item
+        except Exception as e:
+            logger.exception("failed to deserialize '%s' [%s]", str(item_data), str(e))
+            return None
+
+    @classmethod
+    def from_stream_record(cls, record: dict):
+        """parse this dbitem from a dynamodb stream
+        """
+        raw_item = cls.deserialize_db_item(record["dynamodb"]["NewImage"])
+        pk = raw_item.get("PK")
+        sk = raw_item.get("SK")
+
+        if not cls.is_match(pk, sk):
+            raise ValueError("Record does not match pattern")
+
+        return cls(**raw_item)
+
+    @classmethod
+    def from_dynamo_item(cls, item: dict) -> "DBItem":
+        """ebuild a typed object from a full DynamoDB item
+        NB: this assumes the response is from a boto3 table resource, not a table client.
+            table client type information can be removed with cls.deserialize_db_item
+        """
+        return cls(**{k: v for k, v in item.items() if k not in ("PK", "SK")})
+
+    def to_dynamo_item(self, kv_fn="model_dump") -> dict:
+        """convert the object to dynamodb Item dict
+
+        kv_fn_name: function name to extract the key/values as a dict
+                    defaults to "model_dump" for pydantic usage.
+
+        returns: a dict which can be used in table.put_item(Item=item)
+        """
+        item_data = self.model_dump()
+        key_data = self.create_item_key(**item_data)
+        # merge the two dicts to form the final Item representation
+        return {**item_data, **key_data}
+
+    def handle_stream_event(self, event_type: str):
+        """optional event handler for streams
+        """
+        pass
