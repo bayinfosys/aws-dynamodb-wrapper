@@ -1,8 +1,9 @@
-import boto3
 import string
 import logging
 
 from parse import parse
+
+from boto3.dynamodb.types import TypeDeserializer
 
 
 logger = logging.getLogger(__name__)
@@ -79,7 +80,9 @@ class DBItem:
 
         # TODO: starting from the end, work backwards until we find a placeholder in kwargs
         # NB: this is a little hardcoded for integer format strings
-        last_placeholder = ":".join(list(parsed_fields)[-1][1:3])  # last placeholder wuth format string
+        last_placeholder = ":".join(
+            list(parsed_fields)[-1][1:3]
+        )  # last placeholder wuth format string
 
         # Check if the last placeholder is missing in kwargs
         if last_placeholder not in kwargs:
@@ -118,19 +121,22 @@ class DBItem:
     @classmethod
     def is_match(cls, pk: str, sk: str) -> bool:
         """return True if pk and sk can be parsed into pk_pattern and sk_pattern
-           False otherwise
+        False otherwise
         """
         return (
-            parse(cls.pk_pattern, pk) is not None and
-            parse(cls.sk_pattern, sk) is not None
+            parse(cls.pk_pattern, pk) is not None
+            and parse(cls.sk_pattern, sk) is not None
         )
 
     @classmethod
     def deserialize_db_item(cls, item_data):
-        """convert the db annotated item to python dict"""
+        """convert the db annotated item to python dict
+        ref: https://boto3.amazonaws.com/v1/documentation/api/latest/_modules/boto3/dynamodb/types.html
+        """
+        d = TypeDeserializer()
+
         try:
             # remove the ["S"] typing information
-            d = boto3.dynamodb.types.TypeDeserializer()
             item = {k: d.deserialize(v) for k, v in item_data.items()}
             return item
         except Exception as e:
@@ -139,11 +145,20 @@ class DBItem:
 
     @classmethod
     def from_stream_record(cls, record: dict):
-        """parse this dbitem from a dynamodb stream
-        """
+        """parse this dbitem from a dynamodb stream"""
         raw_item = cls.deserialize_db_item(record["dynamodb"]["NewImage"])
-        pk = raw_item.get("PK")
-        sk = raw_item.get("SK")
+
+        if "PK" not in raw_item:
+            raise ValueError("Expected 'PK' in '%s'" % str(raw_item))
+
+        if "SK" not in raw_item:
+            raise ValueError("Expected 'SK' in '%s'" % str(raw_item))
+
+        pk = raw_item.pop("PK")
+        sk = raw_item.pop("SK")
+
+        if not raw_item:
+            raise ValueError("Record only contains PK, SK")
 
         if not cls.is_match(pk, sk):
             raise ValueError("Record does not match pattern")
@@ -172,6 +187,5 @@ class DBItem:
         return {**item_data, **key_data}
 
     def handle_stream_event(self, event_type: str):
-        """optional event handler for streams
-        """
+        """optional event handler for streams"""
         pass
