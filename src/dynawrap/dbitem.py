@@ -3,7 +3,7 @@ import logging
 
 from parse import parse
 
-from boto3.dynamodb.types import TypeDeserializer
+from botocore.dynamodb.types import TypeDeserializer
 
 
 logger = logging.getLogger(__name__)
@@ -135,13 +135,7 @@ class DBItem:
         """
         d = TypeDeserializer()
 
-        try:
-            # remove the ["S"] typing information
-            item = {k: d.deserialize(v) for k, v in item_data.items()}
-            return item
-        except Exception as e:
-            logger.exception("failed to deserialize '%s' [%s]", str(item_data), str(e))
-            return None
+        return {k: d.deserialize(v) for k, v in item_data.items()}
 
     @classmethod
     def from_stream_record(cls, record: dict):
