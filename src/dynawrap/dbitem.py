@@ -1,7 +1,8 @@
 import boto3
 import string
-import parse
 import logging
+
+from parse import parse
 
 
 logger = logging.getLogger(__name__)
