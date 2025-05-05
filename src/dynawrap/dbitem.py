@@ -3,7 +3,7 @@ import logging
 
 from parse import parse
 
-from botocore.dynamodb.types import TypeDeserializer
+from boto3.dynamodb.types import TypeDeserializer
 
 
 logger = logging.getLogger(__name__)
