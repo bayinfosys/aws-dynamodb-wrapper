@@ -157,7 +157,9 @@ class DBItem:
         if not cls.is_match(pk, sk):
             raise ValueError("Record does not match pattern")
 
-        return cls(**raw_item)
+        fields = cls.deserialise_db_item(raw_item)
+
+        return cls(**fields)
 
     @classmethod
     def from_dynamo_item(cls, item: dict) -> "DBItem":
