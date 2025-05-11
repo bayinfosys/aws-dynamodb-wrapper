@@ -4,65 +4,156 @@ from dynawrap import DBItem
 
 
 class TestDBItemFromStream(unittest.TestCase):
-    class X(DBItem):
-        pk_pattern: ClassVar[str] = "USER#SIGNUP"
-        sk_pattern: ClassVar[str] = "TS#{timestamp}"
-
-        def __init__(self, username=None, timestamp=None, email=None):
-            self.username = username
-            self.timestamp = timestamp
-            self.email = email
-
     def setUp(self):
-        self.stream_record = {
-            "eventID": "81193db2e4b50f75909a915b236d96ac",
-            "eventName": "INSERT",
-            "eventVersion": "1.1",
-            "eventSource": "aws:dynamodb",
-            "awsRegion": "eu-west-2",
-            "dynamodb": {
-                "ApproximateCreationDateTime": 1746399467.0,
-                "Keys": {
-                    "SK": {"S": "TS#2025-05-04T22:57:47"},
-                    "PK": {"S": "USER#SIGNUP"},
+        class SignupItem(DBItem):
+            pk_pattern: ClassVar[str] = "USER#SIGNUP"
+            sk_pattern: ClassVar[str] = "TS#{timestamp}"
+
+            def __init__(self, username=None, timestamp=None, email=None):
+                self.username = username
+                self.timestamp = timestamp
+                self.email = email
+
+        class StoryItem(DBItem):
+            pk_pattern: ClassVar[str] = "USER#{owner}#STORY"
+            sk_pattern: ClassVar[str] = "TS#{created_at}"
+
+            def __init__(self, owner=None, created_at=None, title=None):
+                self.owner = owner
+                self.created_at = created_at
+                self.title = title
+
+        class UserComment(DBItem):
+            pk_pattern: ClassVar[str] = "USER#COMMENT"
+            sk_pattern: ClassVar[str] = "REF#{item_ref}#USER#{username}#TS#{timestamp}"
+
+            def __init__(
+                self,
+                trace_id=None,
+                item_ref=None,
+                event_name=None,
+                comment=None,
+                ttl=None,
+                timestamp=None,
+                username=None,
+            ):
+                self.trace_id = trace_id
+                self.item_ref = item_ref
+                self.event_name = event_name
+                self.comment = comment
+                self.ttl = int(ttl) if ttl is not None else None
+                self.timestamp = int(timestamp) if timestamp is not None else None
+                self.username = username
+
+        self.test_cases = [
+            {
+                "cls": SignupItem,
+                "stream_record": {
+                    "dynamodb": {
+                        "NewImage": {
+                            "PK": {"S": "USER#SIGNUP"},
+                            "SK": {"S": "TS#2025-05-04T22:57:47"},
+                            "username": {"S": "tester-001"},
+                            "timestamp": {"S": "2025-05-04T22:57:47"},
+                            "email": {"S": "tester@example.com"},
+                        }
+                    }
                 },
-                "NewImage": {
-                    "SK": {"S": "TS#2025-05-04T22:57:47"},
-                    "PK": {"S": "USER#SIGNUP"},
-                    "email": {"S": "tester@example.com"},
-                    "timestamp": {"S": "2025-05-04T22:57:47"},
-                    "username": {"S": "tester-001"},
+                "expected_dict": {
+                    "username": "tester-001",
+                    "timestamp": "2025-05-04T22:57:47",
+                    "email": "tester@example.com",
                 },
-                "SequenceNumber": "7416300002271126548794192",
-                "SizeBytes": 143,
-                "StreamViewType": "NEW_IMAGE",
+                "expected_keys": {
+                    "PK": "USER#SIGNUP",
+                    "SK": "TS#2025-05-04T22:57:47",
+                },
             },
-            "eventSourceARN": "arn:aws:dynamodb:eu-west-2:192117775384:table/popstory-fm-dev-events/stream/2025-05-03T08:57:00.290",
-        }
-
-        self.expected_dict = {
-            "email": "tester@example.com",
-            "timestamp": "2025-05-04T22:57:47",
-            "username": "tester-001"
-        }
-
-        self.expected_keys = {
-            "PK": "USER#SIGNUP",
-            "SK": "TS#2025-05-04T22:57:47"
-        }
+            {
+                "cls": StoryItem,
+                "stream_record": {
+                    "dynamodb": {
+                        "NewImage": {
+                            "PK": {"S": "USER#alice#STORY"},
+                            "SK": {"S": "TS#2025-05-10T15:30:00"},
+                            "owner": {"S": "alice"},
+                            "created_at": {"S": "2025-05-10T15:30:00"},
+                            "title": {"S": "A Cool Story"},
+                        }
+                    }
+                },
+                "expected_dict": {
+                    "owner": "alice",
+                    "created_at": "2025-05-10T15:30:00",
+                    "title": "A Cool Story",
+                },
+                "expected_keys": {
+                    "PK": "USER#alice#STORY",
+                    "SK": "TS#2025-05-10T15:30:00",
+                },
+            },
+            {
+                "cls": UserComment,
+                "stream_record": {
+                    "dynamodb": {
+                        "NewImage": {
+                            "PK": {"S": "USER#COMMENT"},
+                            "SK": {
+                                "S": "REF#78d5e580-968e-4f37-a116-d29ad988cc80#USER#tester-002#TS#1746990301418"
+                            },
+                            "trace_id": {
+                                "S": "c8e9f5d3-224d-48b3-a9ec-4766d869c417"
+                            },
+                            "item_ref": {
+                                "S": "78d5e580-968e-4f37-a116-d29ad988cc80"
+                            },
+                            "event_name": {"S": "event.user.comment"},
+                            "comment": {"S": "there we are then"},
+                            "ttl": {"N": "1749582301"},
+                            "timestamp": {"N": "1746990301418"},
+                            "username": {"S": "tester-002"},
+                        }
+                    }
+                },
+                "expected_dict": {
+                    "trace_id": "c8e9f5d3-224d-48b3-a9ec-4766d869c417",
+                    "item_ref": "78d5e580-968e-4f37-a116-d29ad988cc80",
+                    "event_name": "event.user.comment",
+                    "comment": "there we are then",
+                    "ttl": 1749582301,
+                    "timestamp": 1746990301418,
+                    "username": "tester-002",
+                },
+                "expected_keys": {
+                    "PK": "USER#COMMENT",
+                    "SK": "REF#78d5e580-968e-4f37-a116-d29ad988cc80#USER#tester-002#TS#1746990301418",
+                },
+            },
+        ]
 
     def test_from_stream_record(self):
-        obj = self.X.from_stream_record(self.stream_record)
-        self.assertEqual(obj.timestamp, self.expected_dict["timestamp"])
-        self.assertEqual(obj.username, self.expected_dict["username"])
-        self.assertEqual(obj.email, self.expected_dict["email"])
+        for case in self.test_cases:
+            with self.subTest(cls=case["cls"].__name__):
+                obj = case["cls"].from_stream_record(case["stream_record"])
+                for field, expected_value in case["expected_dict"].items():
+                    self.assertEqual(getattr(obj, field), expected_value)
 
     def test_deserialize_user_fields_only(self):
-        deserialized = self.X.deserialize_db_item(self.stream_record["dynamodb"]["NewImage"])
-        filtered = {k: deserialized[k] for k in self.expected_dict}
-        self.assertEqual(filtered, self.expected_dict)
+        for case in self.test_cases:
+            with self.subTest(cls=case["cls"].__name__):
+                cls = case["cls"]
+                deserialized = cls.deserialize_db_item(
+                    case["stream_record"]["dynamodb"]["NewImage"]
+                )
+                filtered = {k: deserialized[k] for k in case["expected_dict"]}
+                self.assertEqual(filtered, case["expected_dict"])
 
     def test_deserialize_includes_correct_keys(self):
-        deserialized = self.X.deserialize_db_item(self.stream_record["dynamodb"]["NewImage"])
-        for key, value in self.expected_keys.items():
-            self.assertEqual(deserialized[key], value, f"{key} mismatch")
+        for case in self.test_cases:
+            with self.subTest(cls=case["cls"].__name__):
+                cls = case["cls"]
+                deserialized = cls.deserialize_db_item(
+                    case["stream_record"]["dynamodb"]["NewImage"]
+                )
+                for key, value in case["expected_keys"].items():
+                    self.assertEqual(deserialized[key], value, f"{key} mismatch")
