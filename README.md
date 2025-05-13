@@ -1,106 +1,110 @@
 # aws-dynamodb-wrapper
 
-A lightweight wrapper to manage access patterns and object-oriented interactions with AWS DynamoDB tables. This library simplifies the management of access patterns for keys (`PK`, `SK`) and provides an intuitive way to save, read, and update items in DynamoDB.
+A lightweight Python library to manage access patterns and object-oriented interactions with AWS DynamoDB. This wrapper uses Pydantic for schema validation and simplifies the handling of partition and sort keys (`PK`, `SK`) in DynamoDB tables.
 
 ## Features
 
-- Simplify read/write operations with object-oriented classes.
-- Automatically register and validate table-specific key patterns.
-- Provides low-level DynamoDB operations via `boto3`.
+- Object-oriented interface for defining and managing DynamoDB items.
+- Clean separation of key formatting logic and data modeling.
+- Supports stream record deserialization and event handling.
+- Compatible with native `boto3` DynamoDB resources.
 
 ## Installation
 
-Install via pip:
 ```bash
 pip install dynawrap
-```
+````
 
-## Usage
+## Quickstart
 
-### Define Access Patterns
-Define your DynamoDB schema using classes that inherit from `DBItem`. Provide the table name, primary key (`PK`) pattern, and sort key (`SK`) pattern.
+### 1. Define Your Model
+
+Create a class that inherits from `DBItem` and `pydantic.BaseModel`. Define your primary and sort key formats.
 
 ```python
-from dynawrap import DynamodbWrapper, DBItem
+from dynawrap import DBItem
+from pydantic import BaseModel
 
-class Story(DBItem):
-    table_name = "StoryTable"
+class Story(DBItem, BaseModel):
     pk_pattern = "USER#{owner}#STORY#{story_id}"
     sk_pattern = "STORY#{story_id}"
+
+    owner: str
+    story_id: str
+    title: str
 ```
 
-### Save Items
-Save an item to DynamoDB by populating its attributes and calling `save()`.
+### 2. Save to DynamoDB
+
+Use the standard `boto3` table resource:
 
 ```python
-db_wrapper = DynamodbWrapper()
-story = Story(db_wrapper)
-story_data = {"owner": "johndoe", "story_id": "1234", "title": "Test Story"}
-story.save(story_data)
+import boto3
+
+table = boto3.resource("dynamodb").Table("StoryTable")
+
+story = Story(owner="johndoe", story_id="1234", title="Test Story")
+table.put_item(Item=story.to_dynamo_item())
 ```
 
-### Read Items
-Read items by providing the required key attributes.
+### 3. Read from DynamoDB
 
 ```python
-retrieved_story = Story.read(db_wrapper, owner="johndoe", story_id="1234")
-print(retrieved_story.data)
+item_data = table.get_item(Key=Story.create_item_key(owner="johndoe", story_id="1234")).get("Item")
+
+if item_data:
+    story = Story.from_dynamo_item(item_data)
+    print(story.title)
 ```
 
-### Update Items
-Update items with new attributes by saving them again.
+### 4. DynamoDB Streams Integration
+
+You can construct typed instances directly from stream records and handle events:
 
 ```python
-story.data['title'] = "Updated Story Title"
-story.save(story.data)
-```
+class UserProfile(DBItem, BaseModel):
+    pk_pattern = "USER#{user_id}"
+    sk_pattern = "PROFILE"
 
-### DynamoDB Streams
-From a lambda handler of a dynamodb stream, automatically call the appropriate model and handler:
-
-```python
-class UserProfile(BaseModel, DBItem):
-    ...
+    user_id: str
+    email: str
 
     def handle_stream_event(self, event_type: str):
         if event_type == "INSERT":
-            # send a welcome email on new user signup
             send_welcome_email(self.email)
-
 
 def lambda_handler(event, context):
     for record in event["Records"]:
         try:
-            model = ModelRegistry.from_stream(record)
-            model.handle_stream_event(record["eventName"])
+            obj = UserProfile.from_stream_record(record)
+            obj.handle_stream_event(record["eventName"])
         except Exception as e:
-            logger.warning("Unprocessable record: %s", e)
+            logger.warning("Failed to process record: %s", e)
 ```
 
-### Advanced Operations
-- **Custom Access Patterns:** Create multiple `AccessPattern` instances for advanced queries.
-- **Global Secondary Indexes (GSI):** Define GSIs for alternative query patterns (future feature).
+---
 
-## Example with Prefect
-Use Dynawrap to log Prefect task and flow metadata to DynamoDB:
+## Advanced Features
+
+### Partial Key Queries
+
 ```python
-from dynawrap import DynamodbWrapper, DBItem
-
-class PrefectMetadata(DBItem):
-    table_name = "PrefectMetadata"
-    pk_pattern = "FLOW#{flow_id}"
-    sk_pattern = "TASK#{task_id}"
-
-db_wrapper = DynamodbWrapper(PrefectMetadata)
-
-# Save a flow state
-flow_metadata = {
-    "flow_id": "1234",
-    "task_id": "5678",
-    "state": "Completed",
-}
-PrefectMetadata(db_wrapper).save(flow_metadata)
+prefix = Story.partial_key_prefix("STORY#{story_id}", story_id="1234")
+# e.g., STORY#1234
 ```
+
+Use with `begins_with()` for queries:
+
+```python
+from boto3.dynamodb.conditions import Key
+
+response = table.query(
+    KeyConditionExpression=Key("PK").eq("USER#johndoe#STORY#1234") & Key("SK").begins_with("STORY#")
+)
+```
+
+---
 
 ## License
+
 This project is licensed under the MIT License.

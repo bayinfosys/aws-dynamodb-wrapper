@@ -1,3 +1,7 @@
+"""DEPRECATED
+
+this class is not required
+"""
 import logging
 
 import boto3

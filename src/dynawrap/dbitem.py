@@ -2,154 +2,104 @@ import string
 import logging
 
 from parse import parse
-
 from boto3.dynamodb.types import TypeDeserializer
-
+import boto3
 
 logger = logging.getLogger(__name__)
 
 
 class DBItem:
     """Base class for a DynamoDB row item.
-    To be used as a mixin with pydantic.BaseModel.
 
-    Subclasses define their specific `pk_pattern`, and `sk_pattern`.
+    Designed as a mixin for pydantic.BaseModel subclasses.
 
-    Attributes:
-        pk_pattern (str): The primary key pattern for the item.
-        sk_pattern (str): The sort key pattern for the item.
+    Subclasses must define:
+        - pk_pattern: primary key pattern string.
+        - sk_pattern: sort key pattern string.
 
     Example:
-
         class Story(DBItem):
             pk_pattern = "USER#{owner}#STORY#{story_id}"
             sk_pattern = "STORY#{story_id}"
 
-        dynamodb = boto3.resource("dynamodb")
-        table = dynamodb.Table()
-
-        # Save a story
-        story = Story()
-        story.data = {"owner": "johndoe", "story_id": "1234", "title": "My Story"}
+        # Writing an item
+        story = Story(owner="johndoe", story_id="1234", title="My Story")
         table.put_item(Item=story.to_dynamo_item())
 
-        # Read a story
-        story_key = Story.create_item_key(owner="johndoe", story_id="1234")
-        retrieved_story = table.get_item(Item=story_key)
-        print(retrieved_story.data)
+        # Reading an item
+        story = Story.read("StoriesTable", owner="johndoe", story_id="1234")
+        print(story.title)
     """
 
     pk_pattern = None
     sk_pattern = None
 
     @classmethod
-    def key(cls, key_pattern, **kwargs):
-        """Generates a key string based on the specified access pattern.
-
-        Args:
-            key_type (str): The name of the access pattern.
-            **kwargs: Values to replace the placeholders in the pattern.
-
-        Returns:
-            str: The generated key string.
-        """
+    def format_key(cls, key_pattern, **kwargs):
+        """Format a key string using the provided pattern and kwargs."""
         try:
             return key_pattern.format(**kwargs)
         except KeyError as e:
-            # key error is allowed because we retry with a prefix
-            raise e
+            raise KeyError(f"Missing key for pattern: {e}")
 
     @classmethod
-    def prefix_key(cls, key_pattern: str, **kwargs):
-        """Dynamically generate an SK prefix by trimming the last missing variable.
-        Do not include the latter placeholder key in kwargs, and this will generate
-        a prefix search.
+    def partial_key_prefix(cls, key_pattern: str, **kwargs):
+        """Generate a prefix SK by trimming the last unresolved placeholder.
 
         Args:
-            key_pattern (str): The key pattern with placeholders.
-            **kwargs: Key-value pairs to populate the SK sans last placeholder
+            key_pattern (str): Key pattern with placeholders.
+            **kwargs: Partially supplied key-value pairs.
 
         Returns:
-            str: The SK prefix (truncated if necessary).
+            str: Resolved prefix key.
         """
         formatter = string.Formatter()
         parsed_fields = list(formatter.parse(key_pattern))
 
-        if not parsed_fields:
-            return cls.key(key_pattern, **kwargs)
+        prefix_parts = []
+        for literal_text, field_name, format_spec, _ in parsed_fields:
+            prefix_parts.append(literal_text)
+            if field_name:
+                if field_name in kwargs:
+                    prefix_parts.append(str(kwargs[field_name]))
+                else:
+                    break  # Stop at the first missing key
 
-        # TODO: starting from the end, work backwards until we find a placeholder in kwargs
-        # NB: this is a little hardcoded for integer format strings
-        last_placeholder = ":".join(
-            list(parsed_fields)[-1][1:3]
-        )  # last placeholder wuth format string
-
-        # Check if the last placeholder is missing in kwargs
-        if last_placeholder not in kwargs:
-            prefix_pattern = key_pattern.split(f"{{{last_placeholder}}}")[0]
-            return cls.key(prefix_pattern, **kwargs)
-        else:
-            logger.warning("all placeholders found in kwargs")
-
-        # If all placeholders are present, format normally
-        return cls.key(key_pattern, **kwargs)
+        return "".join(prefix_parts)
 
     @classmethod
     def create_item_key(cls, **kwargs):
-        """Generates PK and SK keys based on specified access patterns.
-
-        if the kwargs for sk are not all present, the method attempts to build a prefix sk
-
-        Args:
-            pk_pattern_name (str): Name of the PK access pattern.
-            sk_pattern_name (str): Name of the SK access pattern.
-            **kwargs: Values to replace placeholders in the patterns.
-
-        Returns:
-            dict: A dictionary containing the generated PK and SK keys.
-        """
-        pk = cls.key(cls.pk_pattern, **kwargs)
-
-        # if the sk is not fully define, attempt to build a prefix sk
+        """Generate the full PK and SK for this item using the class patterns."""
+        pk = cls.format_key(cls.pk_pattern, **kwargs)
         try:
-            sk = cls.key(cls.sk_pattern, **kwargs)
+            sk = cls.format_key(cls.sk_pattern, **kwargs)
         except KeyError:
-            sk = cls.prefix_key(cls.sk_pattern, **kwargs)
-
+            sk = cls.partial_key_prefix(cls.sk_pattern, **kwargs)
         return {"PK": pk, "SK": sk}
 
     @classmethod
     def is_match(cls, pk: str, sk: str) -> bool:
-        """return True if pk and sk can be parsed into pk_pattern and sk_pattern
-        False otherwise
-        """
+        """Check if a given PK/SK matches this class's pattern."""
         return (
             parse(cls.pk_pattern, pk) is not None
             and parse(cls.sk_pattern, sk) is not None
         )
 
-    @classmethod
-    def deserialize_db_item(cls, item_data):
-        """convert the db annotated item to python dict
-        ref: https://boto3.amazonaws.com/v1/documentation/api/latest/_modules/boto3/dynamodb/types.html
-        """
-        d = TypeDeserializer()
-
-        return {k: d.deserialize(v) for k, v in item_data.items()}
+    @staticmethod
+    def deserialize_db_item(item_data):
+        """Convert DynamoDB-annotated item into a standard Python dict."""
+        deserializer = TypeDeserializer()
+        return {k: deserializer.deserialize(v) for k, v in item_data.items()}
 
     @classmethod
     def from_stream_record(cls, record: dict):
-        """parse this dbitem from a dynamodb stream"""
+        """Construct an instance from a DynamoDB stream record."""
         raw_item = cls.deserialize_db_item(record["dynamodb"]["NewImage"])
+        pk = raw_item.pop("PK", None)
+        sk = raw_item.pop("SK", None)
 
-        if "PK" not in raw_item:
-            raise ValueError("Expected 'PK' in '%s'" % str(raw_item))
-
-        if "SK" not in raw_item:
-            raise ValueError("Expected 'SK' in '%s'" % str(raw_item))
-
-        pk = raw_item.pop("PK")
-        sk = raw_item.pop("SK")
+        if pk is None or sk is None:
+            raise ValueError("Missing PK or SK in stream record.")
 
         if not raw_item:
             raise ValueError("Record only contains PK, SK")
@@ -161,25 +111,39 @@ class DBItem:
 
     @classmethod
     def from_dynamo_item(cls, item: dict) -> "DBItem":
-        """ebuild a typed object from a full DynamoDB item
-        NB: this assumes the response is from a boto3 table resource, not a table client.
-            table client type information can be removed with cls.deserialize_db_item
-        """
+        """Instantiate class from a raw DynamoDB item."""
         return cls(**{k: v for k, v in item.items() if k not in ("PK", "SK")})
 
-    def to_dynamo_item(self, kv_fn="model_dump") -> dict:
-        """convert the object to dynamodb Item dict
-
-        kv_fn_name: function name to extract the key/values as a dict
-                    defaults to "model_dump" for pydantic usage.
-
-        returns: a dict which can be used in table.put_item(Item=item)
-        """
+    def to_dynamo_item(self) -> dict:
+        """Convert the instance into a full DynamoDB item dictionary."""
         item_data = self.model_dump()
         key_data = self.create_item_key(**item_data)
-        # merge the two dicts to form the final Item representation
         return {**item_data, **key_data}
 
     def handle_stream_event(self, event_type: str):
-        """optional event handler for streams"""
+        """Optional hook for handling stream events."""
         pass
+
+    @classmethod
+    def read(cls, table, **kwargs) -> "DBItem":
+        """Read an item from DynamoDB and return an instance of this class.
+
+        Args:
+            table (dynamodb table resource): The DynamoDB table.
+            **kwargs: Arguments to generate the item's PK/SK.
+
+        Returns:
+            DBItem: Instance containing the retrieved data.
+        """
+        key = cls.create_item_key(**kwargs)
+
+        response = table.get_item(Key=key)
+        item = response.get("Item")
+
+        if not item:
+            raise KeyError(f"Item not found with key: {key}")
+
+        return cls.from_dynamo_item(item)
+
+    def __repr__(self):
+        return f"<{self.__class__.__name__} {self.to_dynamo_item()}>"
