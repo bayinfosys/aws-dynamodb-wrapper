@@ -139,7 +139,8 @@ class DBItem:
     @classmethod
     def from_dynamo_item(cls, item: dict) -> "DBItem":
         """Instantiate class from a raw DynamoDB item."""
-        return cls(**{k: v for k, v in item.items() if k not in ("PK", "SK")})
+        item_data = cls.deserialize_db_item(item)
+        return cls(**{k: v for k, v in item_data.items() if k not in ("PK", "SK")})
 
     def to_dynamo_item(self) -> dict:
         """Convert the instance into a full DynamoDB item dictionary."""
