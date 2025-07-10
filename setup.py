@@ -18,10 +18,10 @@ setup(
     ],
     python_requires=">=3.7",
     install_requires=[
-        "boto3>=1.20.0",
         "parse"
     ],
     extras_require={
         "dev": ["pytest", "black", "flake8"],
+        "local": ["boto3"]
     },
 )

@@ -1,9 +1,14 @@
-import string
 import logging
+import string
 
 from parse import parse
-from boto3.dynamodb.types import TypeDeserializer
-import boto3
+
+try:
+    from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
+except ImportError:
+    TypeDeserializer = None
+    TypeSerializer = None
+
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +74,9 @@ class DBItem:
 
     @classmethod
     def create_item_key(cls, **kwargs):
-        """Generate the full PK and SK for this item using the class patterns."""
+        """Generate the full PK and SK for this item using the class patterns.
+        NB: PK must always be fully specified, but SK can be partial.
+        """
         pk = cls.format_key(cls.pk_pattern, **kwargs)
         try:
             sk = cls.format_key(cls.sk_pattern, **kwargs)
@@ -88,8 +95,28 @@ class DBItem:
     @staticmethod
     def deserialize_db_item(item_data):
         """Convert DynamoDB-annotated item into a standard Python dict."""
+        if TypeDeserializer is None:
+            raise NotImplementedError("boto3 not installed, TypeDeserializer not available")
+
         deserializer = TypeDeserializer()
-        return {k: deserializer.deserialize(v) for k, v in item_data.items()}
+        try:
+            return {k: deserializer.deserialize(v) for k, v in item_data.items()}
+        except Exception as e:
+            logger.exception("unable to deserialize '%s' [%s]", str(item_data), str(e))
+            raise e
+
+    @staticmethod
+    def serialize_db_item(item_data: dict):
+        """convrt a dict to a dynamodb-annotated item"""
+        if TypeSerializer is None:
+            raise NotImplementedError("boto3 not installed, TypeSerializer not available")
+
+        serializer = TypeSerializer()
+        try:
+            return {k: serializer.serialize(v) for k, v in item_data.items()}
+        except Exception as e:
+            logger.exception("unable to serialize '%s' [%s]", str(item_data), str(e))
+            raise e
 
     @classmethod
     def from_stream_record(cls, record: dict):
@@ -118,7 +145,8 @@ class DBItem:
         """Convert the instance into a full DynamoDB item dictionary."""
         item_data = self.model_dump()
         key_data = self.create_item_key(**item_data)
-        return {**item_data, **key_data}
+        item = {**item_data, **key_data}
+        return self.serialize_db_item(item)
 
     def handle_stream_event(self, event_type: str):
         """Optional hook for handling stream events."""
@@ -144,6 +172,24 @@ class DBItem:
             raise KeyError(f"Item not found with key: {key}")
 
         return cls.from_dynamo_item(item)
+
+    @classmethod
+    def query(cls, table, **kwargs):
+        """Query the table with a PK and (assumed) partial SK definition.
+        Yields all objects returned by the query operation.
+        """
+        from boto3.dynamodb.conditions import Key
+
+        paginator = table.meta.client.get_paginator("query")
+        key = cls.create_item_key()  # only PK will be resolved
+        pk_value = key["PK"]
+
+        for page in paginator.paginate(
+            TableName=table.name,
+            KeyConditionExpression=Key("PK").eq(pk_value),
+        ):
+            for item in page.get("Items", []):
+                yield cls.from_dynamo_item(item)
 
     def __repr__(self):
         return f"<{self.__class__.__name__} {self.to_dynamo_item()}>"
