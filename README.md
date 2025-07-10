@@ -105,6 +105,20 @@ response = table.query(
 
 ---
 
+# Integration Note: Compatibility with boto3.client Only
+
+**Important**: `to_dynamo_item()` returns fully-serialized DynamoDB wire format, using `boto3.dynamodb.types.TypeSerializer`. This is only compatible with the low-level `boto3.client("dynamodb")` interface, not the high-level `boto3.resource("dynamodb")`.
+
+If you use `.put_item(Item=...)` on a `Table` object from `boto3.resource`, it will fail because it expects Python-native types (e.g. str, int, dict) and tries to re-serialise them - which breaks when passed already-encoded wire-format types.
+
+Even `table.meta.client` (from a `boto3.resource` object) will not work reliably for this purpose, because it inherits context that bypasses or modifies type behaviour.
+
+**Always** use `boto3.client("dynamodb").put_item(...)` with output `from to_dynamo_item()`.
+
+The point also stands for deserialization using the `.from_dynamo_item()` and `.from_stream_record()` methods.
+
+---
+
 ## License
 
 This project is licensed under the MIT License.
