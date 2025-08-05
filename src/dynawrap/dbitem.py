@@ -73,18 +73,6 @@ class DBItem:
         return "".join(prefix_parts)
 
     @classmethod
-    def create_item_key(cls, **kwargs):
-        """Generate the full PK and SK for this item using the class patterns.
-        NB: PK must always be fully specified, but SK can be partial.
-        """
-        pk = cls.format_key(cls.pk_pattern, **kwargs)
-        try:
-            sk = cls.format_key(cls.sk_pattern, **kwargs)
-        except KeyError:
-            sk = cls.partial_key_prefix(cls.sk_pattern, **kwargs)
-        return {"PK": pk, "SK": sk}
-
-    @classmethod
     def is_match(cls, pk: str, sk: str) -> bool:
         """Check if a given PK/SK matches this class's pattern."""
         return (
@@ -117,6 +105,18 @@ class DBItem:
         except Exception as e:
             logger.exception("unable to serialize '%s' [%s]", str(item_data), str(e))
             raise e
+
+    @classmethod
+    def create_item_key(cls, **kwargs):
+        """Generate the full PK and SK for this item using the class patterns.
+        NB: PK must always be fully specified, but SK can be partial.
+        """
+        pk = cls.format_key(cls.pk_pattern, **kwargs)
+        try:
+            sk = cls.format_key(cls.sk_pattern, **kwargs)
+        except KeyError:
+            sk = cls.partial_key_prefix(cls.sk_pattern, **kwargs)
+        return cls.serialize_db_item({"PK": pk, "SK": sk})
 
     @classmethod
     def from_stream_record(cls, record: dict):
@@ -175,19 +175,40 @@ class DBItem:
         return cls.from_dynamo_item(item)
 
     @classmethod
-    def query(cls, table, **kwargs):
-        """Query the table with a PK and (assumed) partial SK definition.
-        Yields all objects returned by the query operation.
+    def query(cls, dynamodb_client, table_name: str, **kwargs):
         """
-        from boto3.dynamodb.conditions import Key
+        Query items by PK, and optionally filter by partial SK.
 
-        paginator = table.meta.client.get_paginator("query")
-        key = cls.create_item_key()  # only PK will be resolved
-        pk_value = key["PK"]
+        Keyword args should include enough to resolve the PK pattern,
+        and optionally SK prefix (resolved via partial_key_prefix).
+
+        Example:
+            DBItem.query(dynamodb, "MyTable", origin="abc", project="xyz")
+
+        Returns:
+            Iterator[DBItem]
+        """
+        try:
+            pk_str = cls.format_key(cls.pk_pattern, **kwargs)
+        except KeyError as e:
+            raise ValueError(f"Cannot resolve PK for query: {e}")
+
+        key_expr = "PK = :pk_val"
+        expr_values = {":pk_val": {"S": pk_str}}
+
+        # attempt to resolve SK prefix
+        sk_prefix = cls.partial_key_prefix(cls.sk_pattern, **kwargs)
+
+        if sk_prefix:
+            key_expr += " AND begins_with(SK, :sk_prefix)"
+            expr_values[":sk_prefix"] = {"S": sk_prefix}
+
+        paginator = dynamodb_client.get_paginator("query")
 
         for page in paginator.paginate(
-            TableName=table.name,
-            KeyConditionExpression=Key("PK").eq(pk_value),
+            TableName=table_name,
+            KeyConditionExpression=key_expr,
+            ExpressionAttributeValues=expr_values,
         ):
             for item in page.get("Items", []):
                 yield cls.from_dynamo_item(item)
