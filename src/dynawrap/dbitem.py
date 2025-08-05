@@ -116,7 +116,7 @@ class DBItem:
             sk = cls.format_key(cls.sk_pattern, **kwargs)
         except KeyError:
             sk = cls.partial_key_prefix(cls.sk_pattern, **kwargs)
-        return cls.serialize_db_item({"PK": pk, "SK": sk})
+        return {"PK": pk, "SK": sk}
 
     @classmethod
     def from_stream_record(cls, record: dict):
