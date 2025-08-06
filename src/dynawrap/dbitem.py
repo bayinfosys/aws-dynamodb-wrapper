@@ -165,8 +165,9 @@ class DBItem:
             DBItem: Instance containing the retrieved data.
         """
         key = cls.create_item_key(**kwargs)
+        item_key = serialize_db_item(key)
 
-        response = dynamodb_client.get_item(TableName=table_name, Key=key)
+        response = dynamodb_client.get_item(TableName=table_name, Key=item_key)
         item = response.get("Item")
 
         if not item:
