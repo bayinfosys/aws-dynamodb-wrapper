@@ -154,7 +154,7 @@ class DBItem:
         pass
 
     @classmethod
-    def read(cls, table, **kwargs) -> "DBItem":
+    def read(cls, dynamodb_client, table_name: str, **kwargs) -> "DBItem":
         """Read an item from DynamoDB and return an instance of this class.
 
         Args:
@@ -166,7 +166,7 @@ class DBItem:
         """
         key = cls.create_item_key(**kwargs)
 
-        response = table.get_item(Key=key)
+        response = dynamodb_client.get_item(TableName=table_name, Key=key)
         item = response.get("Item")
 
         if not item:
