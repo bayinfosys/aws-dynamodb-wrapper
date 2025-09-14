@@ -1,5 +1,8 @@
+import hashlib
+import json
 import logging
 import string
+from typing import ClassVar, Optional
 
 from parse import parse
 
@@ -22,6 +25,9 @@ class DBItem:
         - pk_pattern: primary key pattern string.
         - sk_pattern: sort key pattern string.
 
+    Subclasses should define:
+        - schema_version: to record schema version information
+
     Example:
         class Story(DBItem):
             pk_pattern = "USER#{owner}#STORY#{story_id}"
@@ -36,8 +42,31 @@ class DBItem:
         print(story.title)
     """
 
-    pk_pattern = None
-    sk_pattern = None
+    pk_pattern: ClassVar[str]
+    sk_pattern: ClassVar[str]
+
+    _class_schema_version: ClassVar[Optional[str]] = None
+    schema_version: str = ""  # version of this instance
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+
+        # auto-generate schema hash from patterns and field info
+        schema_data = {
+            "pk_pattern": cls.pk_pattern,
+            "sk_pattern": cls.sk_pattern,
+        }
+
+        if hasattr(cls, "model_fields"):  # Pydantic model
+            schema_data.update({"fields": sorted(cls.model_fields.keys())})
+
+        schema_str = json.dumps(schema_data, sort_keys=True)
+        cls._class_schema_version = hashlib.md5(schema_str.encode()).hexdigest()
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        if not self.schema_version:
+            self.schema_version = self._class_schema_version
 
     @classmethod
     def format_key(cls, key_pattern, **kwargs):
@@ -143,7 +172,9 @@ class DBItem:
         return cls(**{k: v for k, v in item_data.items() if k not in ("PK", "SK")})
 
     def to_dynamo_item(self) -> dict:
-        """Convert the instance into a full DynamoDB item dictionary."""
+        """Convert the instance into a full DynamoDB item dictionary.
+        NB: if the base class does not define `schema_version` version will not be exported here.
+        """
         item_data = self.model_dump()
         key_data = self.create_item_key(**item_data)
         item = {**item_data, **key_data}
@@ -176,12 +207,15 @@ class DBItem:
         return cls.from_dynamo_item(item)
 
     @classmethod
-    def query(cls, dynamodb_client, table_name: str, **kwargs):
+    def query(cls, dynamodb_client, table_name: str, *, on_error: str = "warn", limit: int = 0, reverse: bool = False, **kwargs):
         """
         Query items by PK, and optionally filter by partial SK.
 
         Keyword args should include enough to resolve the PK pattern,
         and optionally SK prefix (resolved via partial_key_prefix).
+
+        Returned items are instantiated to the class.
+        If the item cannot be instantiated to class we "raise", "skip", or "warn" as in `on_error`.
 
         Example:
             DBItem.query(dynamodb, "MyTable", origin="abc", project="xyz")
@@ -204,15 +238,33 @@ class DBItem:
             key_expr += " AND begins_with(SK, :sk_prefix)"
             expr_values[":sk_prefix"] = {"S": sk_prefix}
 
+        # build the query params
+        query_params = {
+            "TableName": table_name,
+            "KeyConditionExpression": key_expr,
+            "ExpressionAttributeValues": expr_values,
+            "ScanIndexForward": not reverse
+        }
+
+        if limit > 0:
+            query_params.update({"Limit": limit})
+
         paginator = dynamodb_client.get_paginator("query")
 
-        for page in paginator.paginate(
-            TableName=table_name,
-            KeyConditionExpression=key_expr,
-            ExpressionAttributeValues=expr_values,
-        ):
+        for page in paginator.paginate(**query_params):
             for item in page.get("Items", []):
-                yield cls.from_dynamo_item(item)
+                try:
+                    yield cls.from_dynamo_item(item)
+                except Exception as e:
+                    if on_error == "warn":
+                        logger.warning("failed to parse '%s' as %s [%s]", json.dumps(item), str(cls), str(e))
+                    elif on_error == "skip":
+                        continue
+                    elif on_error == "raise":
+                        # TODO: should this be the default?
+                        raise
+                    else:
+                        raise NotImplementedError("'%s' error mode not supported" % str(on_error))
 
     def __repr__(self):
         return f"<{self.__class__.__name__} {self.to_dynamo_item()}>"

@@ -36,15 +36,15 @@ class Story(DBItem, BaseModel):
 
 ### 2. Save to DynamoDB
 
-Use the standard `boto3` table resource:
+**NOTE**: the low-level client must be used to avoid the auto-deserialization of the dynamodb resource.
 
 ```python
 import boto3
 
-table = boto3.resource("dynamodb").Table("StoryTable")
-
+# Use the low-level client
+dynamodb = boto3.client("dynamodb")
 story = Story(owner="johndoe", story_id="1234", title="Test Story")
-table.put_item(Item=story.to_dynamo_item())
+dynamodb.put_item(TableName="StoryTable", Item=story.to_dynamo_item())
 ```
 
 ### 3. Read from DynamoDB
@@ -103,6 +103,41 @@ response = table.query(
 )
 ```
 
+### Schema Versioning
+
+Add a `schema_version` field to your derived classes.
+Dynawrap will compute a hash of the objects `PK`, `SK` and fields to populate this field.
+This simplifies filtering objects in migration scripts.
+
+```python
+# add to your Pydantic model for migration support
+class Story(DBItem, BaseModel):
+    pk_pattern = "USER#{owner}#STORY#{story_id}"
+    sk_pattern = "STORY#{story_id}"
+
+    # Recommended for tracking schema changes
+    schema_version: str = ""
+
+    owner: str
+    story_id: str
+    title: str
+
+# automatic versioning based on model structure
+print(Story._class_schema_version)  # e.g., "a4d8c2b1..."
+```
+
+## Common Patterns
+
+### Querying with the built-in helper
+```python
+# Query all stories by a user
+for story in Story.query(dynamodb, "StoryTable", owner="johndoe"):
+    print(story.title)
+
+# Query with partial SK matching
+for story in Story.query(dynamodb, "StoryTable", owner="johndoe", story_id="partial"):
+    print(story.title)
+```
 ---
 
 # Integration Note: Compatibility with boto3.client Only
@@ -116,6 +151,23 @@ Even `table.meta.client` (from a `boto3.resource` object) will not work reliably
 **Always** use `boto3.client("dynamodb").put_item(...)` with output `from to_dynamo_item()`.
 
 The point also stands for deserialization using the `.from_dynamo_item()` and `.from_stream_record()` methods.
+
+---
+
+## AI Code Generation Guide
+
+When using this library with AI assistants:
+
+1. **Always use `boto3.client("dynamodb")`**, never `boto3.resource("dynamodb")`
+2. **Define both `pk_pattern` and `sk_pattern`** as ClassVars
+3. **Add `schema_version: str = ""`** to all models for migration support
+4. **Use descriptive key patterns** like `"{domain}#{resource}#{type}"` for clear partitioning
+5. **Consider access patterns** when designing SK patterns for range queries
+
+Common patterns:
+- Time-based: `sk_pattern = "{type}#{timestamp}"`
+- Hierarchical: `pk_pattern = "{parent}#{child}#{type}"`
+- Denormalized: Multiple models with same data, different key patterns
 
 ---
 
