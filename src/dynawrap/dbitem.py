@@ -268,3 +268,28 @@ class DBItem:
 
     def __repr__(self):
         return f"<{self.__class__.__name__} {self.to_dynamo_item()}>"
+
+
+    @classmethod
+    def batch_for_writing(cls, table_name: str, items, batch_size: int = 25):
+        """yield a list of items to dynamodb in batches
+
+        use like:
+
+        ```python
+        items: list[MyObjectClass]
+
+        for batched_items in MyObjectClass.batch_for_writing(items):
+            dynamodb.batch_write_item(RequestItems=batched_items)
+        ```
+        """
+        for i in range(0, len(items), batch_size):
+            batch = items[i : i + batch_size]
+
+            request_items = {
+                table_name: [
+                    {"PutRequest": {"Item": item.to_dynamo_item()}} for item in batch
+                ]
+            }
+
+            yield request_items
