@@ -18,10 +18,11 @@ setup(
     ],
     python_requires=">=3.7",
     install_requires=[
-        "parse"
+        "parse",
+        "pydantic>=2.0.0"
     ],
     extras_require={
-        "dev": ["pytest", "black", "flake8"],
-        "local": ["boto3"]
+        "dev": ["pytest", "black", "flake8", "moto[dynamodb]>=5.0.0"],
+        "dynamodb": ["boto3"],
     },
 )

@@ -1,176 +1,189 @@
-# aws-dynamodb-wrapper
+# dynawrap
 
-A lightweight Python library to manage access patterns and object-oriented interactions with AWS DynamoDB. This wrapper uses Pydantic for schema validation and simplifies the handling of partition and sort keys (`PK`, `SK`) in DynamoDB tables.
+A lightweight Python library for object-oriented DynamoDB access. Define
+your key patterns once on the model class; dynawrap handles PK/SK
+construction, serialisation, and query building.
 
-## Features
-
-- Object-oriented interface for defining and managing DynamoDB items.
-- Clean separation of key formatting logic and data modeling.
-- Supports stream record deserialization and event handling.
-- Compatible with native `boto3` DynamoDB resources.
+Works with pydantic BaseModel and dataclasses.
 
 ## Installation
 
-```bash
-pip install dynawrap
-````
+    pip install dynawrap
+
+## Requirements
+
+- Python 3.10+
+- boto3
+- pydantic >= 2.0 (optional; dataclasses also supported)
+
+## Critical: always use boto3.client, never boto3.resource
+
+`to_dynamo_item()` returns DynamoDB wire-format (TypeSerializer output).
+This is only compatible with `boto3.client("dynamodb")`. Using
+`boto3.resource("dynamodb")` or a Table object will fail because the
+resource layer attempts to re-serialise already-encoded values.
+
+Always construct your client as:
+
+    dynamodb = boto3.client("dynamodb")
 
 ## Quickstart
 
-### 1. Define Your Model
+### Define a model
 
-Create a class that inherits from `DBItem` and `pydantic.BaseModel`. Define your primary and sort key formats.
+    from dynawrap import DBItem
+    from pydantic import BaseModel
 
-```python
-from dynawrap import DBItem
-from pydantic import BaseModel
+    class Story(DBItem, BaseModel):
+        pk_pattern = "USER#{owner}#STORY#{story_id}"
+        sk_pattern = "STORY#{story_id}"
 
-class Story(DBItem, BaseModel):
-    pk_pattern = "USER#{owner}#STORY#{story_id}"
-    sk_pattern = "STORY#{story_id}"
+        schema_version: str = ""
 
-    owner: str
-    story_id: str
-    title: str
-```
+        owner: str
+        story_id: str
+        title: str
 
-### 2. Save to DynamoDB
+Both `pk_pattern` and `sk_pattern` are required ClassVar strings.
+Placeholders use Python str.format() syntax: `{field_name}`.
 
-**NOTE**: the low-level client must be used to avoid the auto-deserialization of the dynamodb resource.
+`schema_version` is optional but recommended. dynawrap auto-computes a
+hash of the patterns and field names and stores it on every item, which
+simplifies migration scripts.
 
-```python
-import boto3
+### Write an item
 
-# Use the low-level client
-dynamodb = boto3.client("dynamodb")
-story = Story(owner="johndoe", story_id="1234", title="Test Story")
-dynamodb.put_item(TableName="StoryTable", Item=story.to_dynamo_item())
-```
+    import boto3
 
-### 3. Read from DynamoDB
+    dynamodb = boto3.client("dynamodb")
 
-```python
-item_data = table.get_item(Key=Story.create_item_key(owner="johndoe", story_id="1234")).get("Item")
+    story = Story(owner="johndoe", story_id="1234", title="Test Story")
+    dynamodb.put_item(TableName="stories", Item=story.to_dynamo_item())
 
-if item_data:
-    story = Story.from_dynamo_item(item_data)
-    print(story.title)
-```
+### Read an item
 
-### 4. DynamoDB Streams Integration
+`read()` raises KeyError if the item does not exist.
 
-You can construct typed instances directly from stream records and handle events:
+    try:
+        story = Story.read(dynamodb, "stories", owner="johndoe", story_id="1234")
+        print(story.title)
+    except KeyError:
+        print("not found")
 
-```python
-class UserProfile(DBItem, BaseModel):
-    pk_pattern = "USER#{user_id}"
-    sk_pattern = "PROFILE"
+### Query items
 
-    user_id: str
-    email: str
+`query()` is a generator. It resolves the PK fully from kwargs and builds
+an SK prefix from any kwargs that can be resolved against the SK pattern.
 
-    def handle_stream_event(self, event_type: str):
-        if event_type == "INSERT":
-            send_welcome_email(self.email)
+    # all stories by a user
+    for story in Story.query(dynamodb, "stories", owner="johndoe"):
+        print(story.title)
 
-def lambda_handler(event, context):
-    for record in event["Records"]:
-        try:
-            obj = UserProfile.from_stream_record(record)
-            obj.handle_stream_event(record["eventName"])
-        except Exception as e:
-            logger.warning("Failed to process record: %s", e)
-```
+    # stories by a user with a specific story_id prefix
+    for story in Story.query(dynamodb, "stories", owner="johndoe", story_id="12"):
+        print(story.title)
 
----
+Query options:
 
-## Advanced Features
+    Story.query(dynamodb, "stories", owner="johndoe",
+        limit=10,        # max items to return (0 = no limit)
+        reverse=True,    # scan index in descending SK order
+        on_error="warn", # "warn" | "skip" | "raise" on parse failure
+    )
 
-### Partial Key Queries
+### Update an item
 
-```python
-prefix = Story.partial_key_prefix("STORY#{story_id}", story_id="1234")
-# e.g., STORY#1234
-```
+dynawrap does not have a partial update method. Use `model_copy` (pydantic)
+or `dataclasses.replace` (dataclasses) to produce a new instance, then
+write it back:
 
-Use with `begins_with()` for queries:
+    updated = story.model_copy(update={"title": "New Title"})
+    dynamodb.put_item(TableName="stories", Item=updated.to_dynamo_item())
 
-```python
-from boto3.dynamodb.conditions import Key
+### DynamoDB Streams
 
-response = table.query(
-    KeyConditionExpression=Key("PK").eq("USER#johndoe#STORY#1234") & Key("SK").begins_with("STORY#")
-)
-```
+Construct a typed instance directly from a stream record:
 
-### Schema Versioning
+    class UserProfile(DBItem, BaseModel):
+        pk_pattern = "USER#{user_id}"
+        sk_pattern = "PROFILE"
 
-Add a `schema_version` field to your derived classes.
-Dynawrap will compute a hash of the objects `PK`, `SK` and fields to populate this field.
-This simplifies filtering objects in migration scripts.
+        schema_version: str = ""
+        user_id: str
+        email: str
 
-```python
-# add to your Pydantic model for migration support
-class Story(DBItem, BaseModel):
-    pk_pattern = "USER#{owner}#STORY#{story_id}"
-    sk_pattern = "STORY#{story_id}"
+        def handle_stream_event(self, event_type: str):
+            if event_type == "INSERT":
+                send_welcome_email(self.email)
 
-    # Recommended for tracking schema changes
-    schema_version: str = ""
+    def lambda_handler(event, context):
+        for record in event["Records"]:
+            try:
+                obj = UserProfile.from_stream_record(record)
+                obj.handle_stream_event(record["eventName"])
+            except Exception as e:
+                logger.warning("failed to process record: %s", e)
 
-    owner: str
-    story_id: str
-    title: str
+`from_stream_record()` raises ValueError if the record PK/SK does not
+match the class pattern, which makes it safe to call on a mixed-type
+stream without branching.
 
-# automatic versioning based on model structure
-print(Story._class_schema_version)  # e.g., "a4d8c2b1..."
-```
+## Key utilities
 
-## Common Patterns
+### create_item_key
 
-### Querying with the built-in helper
-```python
-# Query all stories by a user
-for story in Story.query(dynamodb, "StoryTable", owner="johndoe"):
-    print(story.title)
+Returns the raw `{"PK": ..., "SK": ...}` dict for a given set of kwargs.
+PK must be fully resolvable. SK may be partial (returns a prefix).
 
-# Query with partial SK matching
-for story in Story.query(dynamodb, "StoryTable", owner="johndoe", story_id="partial"):
-    print(story.title)
-```
----
+    key = Story.create_item_key(owner="johndoe", story_id="1234")
+    # {"PK": "USER#johndoe#STORY#1234", "SK": "STORY#1234"}
 
-# Integration Note: Compatibility with boto3.client Only
+    prefix = Story.create_item_key(owner="johndoe")
+    # {"PK": "USER#johndoe#STORY#...", "SK": "STORY#"} -- partial SK
 
-**Important**: `to_dynamo_item()` returns fully-serialized DynamoDB wire format, using `boto3.dynamodb.types.TypeSerializer`. This is only compatible with the low-level `boto3.client("dynamodb")` interface, not the high-level `boto3.resource("dynamodb")`.
+### partial_key_prefix
 
-If you use `.put_item(Item=...)` on a `Table` object from `boto3.resource`, it will fail because it expects Python-native types (e.g. str, int, dict) and tries to re-serialise them - which breaks when passed already-encoded wire-format types.
+Resolves a key pattern as far as the supplied kwargs allow, stopping at
+the first unresolved placeholder:
 
-Even `table.meta.client` (from a `boto3.resource` object) will not work reliably for this purpose, because it inherits context that bypasses or modifies type behaviour.
+    Story.partial_key_prefix("STORY#{story_id}#RUN#{run_id}", story_id="1234")
+    # "STORY#1234#RUN#"
 
-**Always** use `boto3.client("dynamodb").put_item(...)` with output `from to_dynamo_item()`.
+### is_match
 
-The point also stands for deserialization using the `.from_dynamo_item()` and `.from_stream_record()` methods.
+Returns True if a given PK/SK pair matches the class pattern:
 
----
+    Story.is_match("USER#johndoe#STORY#1234", "STORY#1234")  # True
+    Story.is_match("USER#johndoe", "PROFILE")                # False
 
-## AI Code Generation Guide
+### to_dict / from_dict
 
-When using this library with AI assistants:
+Backend-agnostic serialisation to/from plain Python dicts. Works for
+both pydantic models and dataclasses:
 
-1. **Always use `boto3.client("dynamodb")`**, never `boto3.resource("dynamodb")`
-2. **Define both `pk_pattern` and `sk_pattern`** as ClassVars
-3. **Add `schema_version: str = ""`** to all models for migration support
-4. **Use descriptive key patterns** like `"{domain}#{resource}#{type}"` for clear partitioning
-5. **Consider access patterns** when designing SK patterns for range queries
+    d = story.to_dict()
+    story2 = Story.from_dict(d)
 
-Common patterns:
-- Time-based: `sk_pattern = "{type}#{timestamp}"`
-- Hierarchical: `pk_pattern = "{parent}#{child}#{type}"`
-- Denormalized: Multiple models with same data, different key patterns
+## Schema versioning
 
----
+dynawrap auto-computes `_class_schema_version` as an MD5 of the pk/sk
+patterns and sorted field names. This is written to `schema_version` on
+every item at construction time.
 
-## License
+Use it in migration scripts to identify items written by an older version
+of a model:
 
-This project is licensed under the MIT License.
+    for story in Story.query(dynamodb, "stories", owner="johndoe"):
+        if story.schema_version != Story._class_schema_version:
+            migrated = migrate(story)
+            dynamodb.put_item(TableName="stories", Item=migrated.to_dynamo_item())
+
+## AI code generation guide
+
+1. Always use `boto3.client("dynamodb")`, never `boto3.resource`
+2. Define both `pk_pattern` and `sk_pattern` as ClassVar strings
+3. Add `schema_version: str = ""` to all models
+4. `query()` is a generator -- wrap in `list()` if you need random access
+5. `read()` raises KeyError on miss -- always handle it
+6. Updates are read-modify-write: `model_copy(update={...})` then `put_item`
+7. `to_dynamo_item()` and `read()`/`query()` require `boto3.client`, not resource

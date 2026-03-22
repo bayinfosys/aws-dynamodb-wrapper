@@ -3,6 +3,7 @@ import json
 import logging
 import string
 from typing import ClassVar, Optional
+from functools import wraps
 
 from parse import parse
 
@@ -14,6 +15,20 @@ except ImportError:
 
 
 logger = logging.getLogger(__name__)
+
+
+def deprecated(message):
+    """Decorator to mark methods as deprecated."""
+
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            logger.warning(f"DEPRECATED: {func.__name__}() - {message}")
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
 
 
 class DBItem:
@@ -29,17 +44,23 @@ class DBItem:
         - schema_version: to record schema version information
 
     Example:
-        class Story(DBItem):
+        class Story(DBItem, BaseModel):
             pk_pattern = "USER#{owner}#STORY#{story_id}"
             sk_pattern = "STORY#{story_id}"
 
-        # Writing an item
-        story = Story(owner="johndoe", story_id="1234", title="My Story")
-        table.put_item(Item=story.to_dynamo_item())
+            schema_version: str = ""
 
-        # Reading an item
-        story = Story.read("StoriesTable", owner="johndoe", story_id="1234")
-        print(story.title)
+            owner: str
+            story_id: str
+            title: str
+
+        client = boto3.client("dynamodb")
+        backend = DynamoDBBackend(client)
+
+        story = Story(owner="johndoe", story_id="1234", title="My Story")
+        backend.save("stories", story)
+
+        retrieved = backend.get("stories", Story, owner="johndoe", story_id="1234")
     """
 
     pk_pattern: ClassVar[str]
@@ -81,7 +102,7 @@ class DBItem:
         """Generate a prefix SK by trimming the last unresolved placeholder.
 
         Args:
-            key_pattern (str): Key pattern with placeholders.
+            key_pattern: Key pattern with placeholders.
             **kwargs: Partially supplied key-value pairs.
 
         Returns:
@@ -109,32 +130,6 @@ class DBItem:
             and parse(cls.sk_pattern, sk) is not None
         )
 
-    @staticmethod
-    def deserialize_db_item(item_data):
-        """Convert DynamoDB-annotated item into a standard Python dict."""
-        if TypeDeserializer is None:
-            raise NotImplementedError("boto3 not installed, TypeDeserializer not available")
-
-        deserializer = TypeDeserializer()
-        try:
-            return {k: deserializer.deserialize(v) for k, v in item_data.items()}
-        except Exception as e:
-            logger.exception("unable to deserialize '%s' [%s]", str(item_data), str(e))
-            raise e
-
-    @staticmethod
-    def serialize_db_item(item_data: dict):
-        """convrt a dict to a dynamodb-annotated item"""
-        if TypeSerializer is None:
-            raise NotImplementedError("boto3 not installed, TypeSerializer not available")
-
-        serializer = TypeSerializer()
-        try:
-            return {k: serializer.serialize(v) for k, v in item_data.items()}
-        except Exception as e:
-            logger.exception("unable to serialize '%s' [%s]", str(item_data), str(e))
-            raise e
-
     @classmethod
     def create_item_key(cls, **kwargs):
         """Generate the full PK and SK for this item using the class patterns.
@@ -146,6 +141,35 @@ class DBItem:
         except KeyError:
             sk = cls.partial_key_prefix(cls.sk_pattern, **kwargs)
         return {"PK": pk, "SK": sk}
+
+    def to_dict(self):
+        """Convert instance to plain Python dict (backend-agnostic)."""
+        import dataclasses
+        try:
+            from pydantic import BaseModel
+        except ImportError:
+            BaseModel = None
+
+        if dataclasses.is_dataclass(self):
+            return dataclasses.asdict(self)
+        if BaseModel is not None and isinstance(self, BaseModel):
+            return self.model_dump()
+        raise TypeError(
+            f"{type(self).__name__} must be either a dataclass or a "
+            "pydantic BaseModel to use DBItem serialisation."
+        )
+
+    @classmethod
+    def from_dict(cls, data):
+        """Create instance from plain Python dict (backend-agnostic).
+
+        Args:
+            data: Dictionary of field values (without PK/SK)
+
+        Returns:
+            DBItem: New instance
+        """
+        return cls(**data)
 
     @classmethod
     def from_stream_record(cls, record: dict):
@@ -165,35 +189,86 @@ class DBItem:
 
         return cls(**raw_item)
 
+    def handle_stream_event(self, event_type: str):
+        """Optional hook for handling stream events.
+
+        Override this method to add custom event handling logic.
+
+        Args:
+            event_type: DynamoDB event type (INSERT, MODIFY, REMOVE)
+        """
+        pass
+
+    def __repr__(self):
+        data = self.to_dict()
+        key = self.create_item_key(**data)
+        return f"<{self.__class__.__name__} PK={key['PK']} SK={key['SK']}>"
+
+    # DEPRECATED METHODS - kept for backwards compatibility
+
+    @staticmethod
+    @deprecated("Use DynamoDBBackend._deserialize_item() instead")
+    def deserialize_db_item(item_data):
+        """Convert DynamoDB-annotated item into a standard Python dict.
+
+        DEPRECATED: This is now handled by backends.
+        """
+        if TypeDeserializer is None:
+            raise NotImplementedError(
+                "boto3 not installed, TypeDeserializer not available"
+            )
+
+        deserializer = TypeDeserializer()
+        try:
+            return {k: deserializer.deserialize(v) for k, v in item_data.items()}
+        except Exception as e:
+            logger.exception("unable to deserialize '%s' [%s]", str(item_data), str(e))
+            raise e
+
+    @staticmethod
+    @deprecated("Use DynamoDBBackend._serialize_item() instead")
+    def serialize_db_item(item_data: dict):
+        """Convert a dict to a dynamodb-annotated item.
+
+        DEPRECATED: This is now handled by backends.
+        """
+        if TypeSerializer is None:
+            raise NotImplementedError(
+                "boto3 not installed, TypeSerializer not available"
+            )
+
+        serializer = TypeSerializer()
+        try:
+            return {k: serializer.serialize(v) for k, v in item_data.items()}
+        except Exception as e:
+            logger.exception("unable to serialize '%s' [%s]", str(item_data), str(e))
+            raise e
+
     @classmethod
+    @deprecated("Use DynamoDBBackend.get() instead")
     def from_dynamo_item(cls, item: dict) -> "DBItem":
         """Instantiate class from a raw DynamoDB item."""
         item_data = cls.deserialize_db_item(item)
         return cls(**{k: v for k, v in item_data.items() if k not in ("PK", "SK")})
 
+    @deprecated("Use backend.save() instead")
     def to_dynamo_item(self) -> dict:
         """Convert the instance into a full DynamoDB item dictionary.
-        NB: if the base class does not define `schema_version` version will not be exported here.
         """
-        item_data = self.model_dump()
+        item_data = self.to_dict()
         key_data = self.create_item_key(**item_data)
         item = {**item_data, **key_data}
         return self.serialize_db_item(item)
 
-    def handle_stream_event(self, event_type: str):
-        """Optional hook for handling stream events."""
-        pass
-
     @classmethod
-    def read(cls, dynamodb_client, table_name: str, **kwargs) -> "DBItem":
+    @deprecated("Use DynamoDBBackend.get() instead")
+    def read(cls, dynamodb_client, table_name: str, **kwargs):
         """Read an item from DynamoDB and return an instance of this class.
 
         Args:
-            table (dynamodb table resource): The DynamoDB table.
+            dynamodb_client,
+            table_name: str
             **kwargs: Arguments to generate the item's PK/SK.
-
-        Returns:
-            DBItem: Instance containing the retrieved data.
         """
         key = cls.create_item_key(**kwargs)
         item_key = cls.serialize_db_item(key)
@@ -207,6 +282,7 @@ class DBItem:
         return cls.from_dynamo_item(item)
 
     @classmethod
+    @deprecated("Use DynamoDBBackend.query() instead")
     def query(cls, dynamodb_client, table_name: str, *, on_error: str = "warn", limit: int = 0, reverse: bool = False, **kwargs):
         """
         Query items by PK, and optionally filter by partial SK.
@@ -222,6 +298,8 @@ class DBItem:
 
         Returns:
             Iterator[DBItem]
+
+        DEPRECATED: Use DynamoDBBackend.query() instead.
         """
         try:
             pk_str = cls.format_key(cls.pk_pattern, **kwargs)
@@ -266,22 +344,12 @@ class DBItem:
                     else:
                         raise NotImplementedError("'%s' error mode not supported" % str(on_error))
 
-    def __repr__(self):
-        return f"<{self.__class__.__name__} {self.to_dynamo_item()}>"
-
-
     @classmethod
+    @deprecated("Use DynamoDBBackend.batch_write() instead")
     def batch_for_writing(cls, table_name: str, items, batch_size: int = 25):
-        """yield a list of items to dynamodb in batches
+        """Yield batches of items for DynamoDB batch_write_item.
 
-        use like:
-
-        ```python
-        items: list[MyObjectClass]
-
-        for batched_items in MyObjectClass.batch_for_writing(items):
-            dynamodb.batch_write_item(RequestItems=batched_items)
-        ```
+        DEPRECATED: Use DynamoDBBackend.batch_write() instead.
         """
         for i in range(0, len(items), batch_size):
             batch = items[i : i + batch_size]
@@ -293,3 +361,13 @@ class DBItem:
             }
 
             yield request_items
+
+    def __post_init__(self):
+        """Called by dataclass-generated __init__. Sets schema_version if not supplied."""
+        if not self.schema_version:
+           self.schema_version = self._class_schema_version
+
+    def __init__(self, **data):
+        """Called by pydantic __init__. Sets schema_version if not supplied."""
+        super().__init__(**data)
+        self.__post_init__()
