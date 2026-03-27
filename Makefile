@@ -15,7 +15,7 @@ test/deploy:
 test: test-unit
 
 test-unit:
-	python -m pytest tests/test_dynamodb_backend.py tests/test_dbitem.py -v
+	python -m pytest tests/ -v
 
 install:
 	pip install -e ".[dev,dynamodb]"

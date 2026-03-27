@@ -4,7 +4,7 @@ setup(
     name="dynawrap",
     use_scm_version={"write_to": "src/dynawrap/_version.py"},
     description="Lightweight wrapper to handle access pattern management to AWS DynamoDB tables",
-    long_description=open("README.md").read(),
+    long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
     author="Ed Grundy",
     author_email="ed@bayis.co.uk",
@@ -22,7 +22,8 @@ setup(
         "pydantic>=2.0.0"
     ],
     extras_require={
-        "dev": ["pytest", "black", "flake8", "moto[dynamodb]>=5.0.0"],
+        "dev": ["pytest", "black", "flake8", "moto[dynamodb]>=5.0.0", "psycopg2-binary"],
         "dynamodb": ["boto3"],
+        "postgres": ["psycopg2-binary"]
     },
 )
