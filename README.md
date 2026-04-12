@@ -320,3 +320,10 @@ Use it in migration scripts to find items written by an older model version:
 8. Updates are read-modify-write: fetch, `model_copy(update={...})`, then `save`
 9. All model code is identical across backends -- only the backend constructor differs
 10. Table names must be code-defined constants, not user input
+
+---
+
+## Projects
+
+[Marigold](https://www.bayis.co.uk/marigold) -- typed inference pipelines over privately hosted open-weight models.
+[PopStory](https://popstory.co.uk) -- childrens story creator.
