@@ -56,11 +56,12 @@ change rather than a code change.
 ### Define a model
 
     from dynawrap import DBItem
+    from typing import ClassVar
     from pydantic import BaseModel
 
     class Story(DBItem, BaseModel):
-        pk_pattern = "USER#{owner}#STORY#{story_id}"
-        sk_pattern = "STORY#{story_id}"
+        pk_pattern: ClassVar[str] = "USER#{owner}#STORY#{story_id}"
+        sk_pattern: ClassVar[str] = "STORY#{story_id}"
 
         schema_version: str = ""
 
@@ -231,8 +232,8 @@ Raises `ValueError` if the record does not match the item class pattern,
 making it safe to call on mixed-type streams without branching.
 
     class UserProfile(DBItem, BaseModel):
-        pk_pattern = "USER#{user_id}"
-        sk_pattern = "PROFILE"
+        pk_pattern: ClassVar[str] = "USER#{user_id}"
+        sk_pattern: ClassVar[str] = "PROFILE"
 
         schema_version: str = ""
         user_id: str
@@ -325,5 +326,6 @@ Use it in migration scripts to find items written by an older model version:
 
 ## Projects
 
-[Marigold](https://www.bayis.co.uk/marigold) -- typed inference pipelines over privately hosted open-weight models.
+Created by [Bay Information Systems](https://www.bayis.co.uk) for project support over
+[Marigold](https://marigold.run) -- typed inference pipelines over privately hosted open-weight models, and
 [PopStory](https://popstory.co.uk) -- childrens story creator.
